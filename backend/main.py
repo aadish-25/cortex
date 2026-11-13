@@ -32,3 +32,8 @@ app.add_middleware(
 @app.get("/health", tags=["health"])
 async def health_check():
     return {"status": "ok"}
+
+
+# Register Routers
+from backend.routers import auth
+app.include_router(auth.router)
