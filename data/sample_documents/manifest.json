@@ -1,0 +1,99 @@
+{
+  "dataset_version": "2.0",
+  "system": "Cortex (AAD-H1)",
+  "purpose": "RAG multi-department access control, clearance level verification, and cross-department policy contradiction testing (India Corporate Context)",
+  "jurisdiction": "India (INR / ₹)",
+  "hubs": ["Bengaluru", "Mumbai", "Gurugram", "Hyderabad", "Pune"],
+  "documents": [
+    {
+      "filename": "ENG_Travel_and_Offsite_Policy.md",
+      "title": "Engineering Department Travel and Technical Offsite Policy (2026)",
+      "department": "Engineering",
+      "clearance_level": "Internal",
+      "format": "markdown",
+      "summary": "Covers engineering travel guidelines, technical hackathons and offsite summits across Bengaluru, Hyderabad, and Pune, daily meal allowance (₹2,500/day), hotel allowance up to ₹6,500/night in Tier-1 cities, Uber/Ola for Business corporate profiles, and Vande Bharat rail travel.",
+      "keywords": ["engineering travel", "meal allowance", "₹2,500", "hotel allowance", "₹6,500", "Tier-1 cities", "Uber for Business", "Ola Corporate", "Bengaluru", "offsite", "Vande Bharat"]
+    },
+    {
+      "filename": "ENG_Travel_and_Offsite_Policy.docx",
+      "title": "Cortex Engineering Policy Directive: Engineering Department Travel and Technical Offsite Policy (2026)",
+      "department": "Engineering",
+      "clearance_level": "Internal",
+      "format": "docx",
+      "summary": "Rich formatted Word document detailing engineering travel rules, ₹2,500/day per diem, hotel ceilings up to ₹6,500/night in metropolitan hubs, Uber and Ola corporate integration, and travel approval procedures.",
+      "keywords": ["engineering travel", "per diem", "₹2,500", "hotel ceiling", "₹6,500", "Uber", "Ola", "Bengaluru", "docx"]
+    },
+    {
+      "filename": "ENG_Workstation_and_Cloud_Infrastructure_Policy.md",
+      "title": "Engineering Workstation, Hardware Provisioning, and Cloud Sandbox Infrastructure Policy",
+      "department": "Engineering",
+      "clearance_level": "Internal",
+      "format": "markdown",
+      "summary": "Mandates hardware provisioning allowances for engineers up to ₹1,50,000 (MacBook Pro M3 or Lenovo ThinkPad P-Series), 3-year refresh cycles with buyback options, monthly cloud sandbox/homelab stipend (₹5,000/month), and endpoint security (AES-256, CrowdStrike Falcon).",
+      "keywords": ["workstation allowance", "₹1,50,000", "MacBook Pro M3", "ThinkPad", "cloud sandbox", "₹5,000", "homelab", "refresh cycle", "AWS Mumbai", "CrowdStrike"]
+    },
+    {
+      "filename": "ENG_Production_Security_and_Secret_Vault.md",
+      "title": "Engineering Infrastructure Security Directive: Production Secret Vault, Zero-Trust Access, and Incident Notification",
+      "department": "Engineering",
+      "clearance_level": "Confidential",
+      "format": "markdown",
+      "summary": "Confidential infrastructure security directive detailing dynamic secrets management with HashiCorp Vault (24-hour TTL), mandatory database password rotation every 60 days with shadow swapping, statutory CERT-In cybersecurity incident notification within 6 hours (Directions 2022 under IT Act Section 70B), 180-day log retention, and SSH bastion access restricted to Bengaluru office static IPs.",
+      "keywords": ["HashiCorp Vault", "password rotation", "60 days", "CERT-In", "6 hours", "incident notification", "bastion host", "Bengaluru static IP", "AES-256", "confidential"]
+    },
+    {
+      "filename": "FIN_Corporate_Travel_and_Expense_Policy.md",
+      "title": "Global Corporate Finance Policy: Business Travel, Expense Reimbursement, and GST Invoicing Compliance",
+      "department": "Finance",
+      "clearance_level": "Internal",
+      "format": "markdown",
+      "summary": "Corporate finance travel rules mandating bookings strictly via MakeMyTrip Corporate portal, domestic daily meal allowance cap of ₹1,500/day, hotel accommodation cap of ₹4,500/night, strict statutory rule requiring valid GST invoices with company GSTIN for any reimbursement exceeding ₹500, and 15-day claim submission deadlines.",
+      "keywords": ["travel policy", "MakeMyTrip Corporate", "meal allowance", "₹1,500", "hotel cap", "₹4,500", "GST invoice", "GSTIN", "₹500 threshold", "Input Tax Credit", "ITC", "expense reimbursement"]
+    },
+    {
+      "filename": "FIN_Statutory_Audit_and_Tax_Provisioning.txt",
+      "title": "Finance Confidential Directive: Statutory External Audit Protocols, Tax Provisioning, and Transfer Pricing Governance",
+      "department": "Finance",
+      "clearance_level": "Confidential",
+      "format": "text",
+      "summary": "Confidential finance directive governing mandatory advance tax payment quarterly schedules under Section 211 of the Income Tax Act (15th June 15%, 15th Sept 45%, 15th Dec 75%, 15th March 100%), interest under Section 234B/234C, Transfer Pricing documentation and Form 3CEB under Section 92E, statutory external audit by Big 4 auditors with 5-year partner rotation (Companies Act 2013 Section 139), and CapEx DoA approval limits in INR.",
+      "keywords": ["advance tax", "15th June", "15th Sept", "15th Dec", "15th March", "Income Tax Act", "Section 92E", "Transfer Pricing", "Form 3CEB", "Big 4 audit", "Companies Act 2013", "CARO 2020", "CapEx approval", "confidential"]
+    },
+    {
+      "filename": "HR_Relocation_and_Domestic_Travel_Policy.md",
+      "title": "Human Resources Policy: Talent Relocation, Transfer Support, and Domestic Travel Guidelines",
+      "department": "HR",
+      "clearance_level": "Internal",
+      "format": "markdown",
+      "summary": "Governs talent relocation grants, transfer packages, and HR assignment travel. Details daily meal allowance (₹1,800/day), inter-city relocation lump sum assistance of ₹75,000 for transfers to Bengaluru, Gurugram, Hyderabad, or Mumbai, 14 days complimentary company guest house stay, empaneled packing/moving coverage up to ₹50,000, and 12-month retention service agreement.",
+      "keywords": ["relocation allowance", "₹75,000", "guest house", "14 days", "meal allowance", "₹1,800", "packers and movers", "Bengaluru", "Gurugram", "travel policy", "service agreement"]
+    },
+    {
+      "filename": "HR_Remote_Work_and_Leave_Policy_2026.md",
+      "title": "Human Resources Policy: Leave Entitlements, Statutory Benefits, and Remote Work Framework (2026)",
+      "department": "HR",
+      "clearance_level": "Internal",
+      "format": "markdown",
+      "summary": "Establishes leave entitlements (24 days annual leave, 12 days casual/sick leave), 26 weeks paid maternity leave under Maternity Benefit (Amendment) Act 2017, 10 days paternity leave, Core Working Hours (10:00 AM - 4:00 PM IST), one-time home office setup reimbursement of ₹35,000, monthly broadband reimbursement of ₹1,500/month, and EPF/Gratuity statutory compliance.",
+      "keywords": ["annual leave", "casual leave", "sick leave", "maternity leave", "26 weeks", "Maternity Benefit Act", "home office reimbursement", "₹35,000", "broadband", "₹1,500", "EPF", "Gratuity Act", "core hours"]
+    },
+    {
+      "filename": "HR_Remote_Work_and_Leave_Policy_2026.docx",
+      "title": "Cortex Human Resources Policy: Leave Entitlements, Statutory Benefits, and Remote Work Framework (2026)",
+      "department": "HR",
+      "clearance_level": "Internal",
+      "format": "docx",
+      "summary": "Rich formatted Word document covering annual leave (24 days), casual/sick leave (12 days), 26 weeks maternity benefit, ₹35,000 home office setup allowance, ₹1,500/month broadband subsidy, and statutory retirement social security.",
+      "keywords": ["HR", "annual leave", "maternity benefit", "remote setup", "₹35,000", "broadband", "₹1,500", "EPF", "Gratuity", "docx"]
+    },
+    {
+      "filename": "HR_POSH_and_Confidential_Code_of_Conduct.txt",
+      "title": "Confidential Governance Protocol: Prevention of Sexual Harassment (POSH Act 2013), Code of Conduct, and Whistleblower Protection",
+      "department": "HR",
+      "clearance_level": "Confidential",
+      "format": "text",
+      "summary": "Confidential HR and legal compliance directive covering mandatory constitution of the Internal Complaints Committee (ICC) under the POSH Act 2013 (Presiding Officer senior woman, 50% female representation, external NGO/legal member), strict 90-day inquiry completion SLA, 10-day report submission, Section 16 confidentiality rules (₹5,000 statutory penalty), interim relief measures, disciplinary actions, and whistleblower anti-retaliation shield.",
+      "keywords": ["POSH Act 2013", "Internal Complaints Committee", "ICC", "90-day SLA", "sexual harassment", "zero-tolerance", "whistleblower", "anti-retaliation", "code of conduct", "confidential"]
+    }
+  ]
+}

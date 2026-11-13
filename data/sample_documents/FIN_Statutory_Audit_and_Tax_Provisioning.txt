@@ -1,0 +1,118 @@
+================================================================================
+CORTEX FINANCIAL CONTROLLER DIRECTIVE & STATUTORY COMPLIANCE PROTOCOL
+DOCUMENT SERIAL: FIN-CONF-2026-014
+SECURITY CLASSIFICATION: CONFIDENTIAL // EXECUTIVE & FINANCE CLEARANCE ONLY
+DEPARTMENT: FINANCE, TREASURY & CORPORATE TAXATION
+TOPIC: STATUTORY EXTERNAL AUDIT PROTOCOLS, ADVANCE TAX PROVISIONING, AND TRANSFER PRICING GOVERNANCE
+EFFECTIVE DATE: JANUARY 15, 2026
+REVIEW CADENCE: QUARTERLY STATUTORY COMPLIANCE AUDIT
+================================================================================
+
+STRICT CONFIDENTIALITY NOTICE:
+THE STATUTORY TAX TIMELINES, TRANSFER PRICING METHODOLOGIES, AND EXTERNAL AUDIT
+CONTROLS DETAILED HEREIN CONSTITUTE SENSITIVE CORPORATE CONTROLS UNDER THE INDIAN
+COMPANIES ACT, 2013 AND THE INCOME TAX ACT, 1961. UNAUTHORIZED REPRODUCTION,
+DISSEMINATION, OR DISCLOSURE TO NON-AUTHORIZED PARTIES IS STRICTLY FORBIDDEN.
+
+--------------------------------------------------------------------------------
+1. ADVANCE TAX QUARTERLY PAYMENT SCHEDULES (INCOME TAX ACT, 1961)
+--------------------------------------------------------------------------------
+1.1 Statutory Liability Framework:
+    Under Section 208 and 209 of the Indian Income Tax Act, 1961, the Company is
+    statutorily required to deposit corporate advance tax in four mandatory quarterly
+    tranches whenever estimated annual net income tax liability exceeds ₹10,000 INR.
+
+1.2 Mandatory Advance Tax Quarterly Due Dates & Cumulative Thresholds:
+    Pursuant to Section 211(1) of the Income Tax Act:
+
+    ----------------------------------------------------------------------------
+    INSTALLMENT DUE DATE            CUMULATIVE STATUTORY TAX PAYABLE
+    ----------------------------------------------------------------------------
+    On or before 15th June          Not less than 15% of estimated net advance tax
+    On or before 15th September     Not less than 45% of estimated net advance tax (less tax paid earlier)
+    On or before 15th December      Not less than 75% of estimated net advance tax (less tax paid earlier)
+    On or before 15th March         100% of estimated net advance tax (less tax paid earlier)
+    ----------------------------------------------------------------------------
+
+1.3 Penal Interest Avoidance under Section 234B & 234C:
+    - Section 234C imposes simple interest at 1% per month on deferment of advance tax
+      installments if paid amounts fall short of the cumulative percentages above.
+    - Section 234B imposes interest at 1% per month if advance tax paid before 31st
+      March is less than 90% of assessed tax.
+    - The Corporate Taxation Desk must complete quarterly closing provisions and
+      challan deposits via the Income Tax e-filing portal (e-Pay Tax) at least 48 hours
+      prior to each statutory cutoff date.
+
+--------------------------------------------------------------------------------
+2. TRANSFER PRICING DOCUMENTATION (SECTION 92E OF THE INCOME TAX ACT)
+--------------------------------------------------------------------------------
+2.1 Statutory Transfer Pricing Requirement:
+    Cortex Technologies India Private Limited engages in significant international
+    transactions and cross-border software development, R&D technical support,
+    and IP licensing with its overseas corporate affiliates and holding entities.
+
+2.2 Arm's Length Price (ALP) Benchmarking:
+    - Pursuant to Sections 92C and 92D of the Income Tax Act, 1961 read with Rule 10D
+      of the Income Tax Rules, all intercompany transactions must satisfy the Arm's
+      Length Standard.
+    - The Company adopts the Transactional Net Margin Method (TNMM) as the primary
+      Most Appropriate Method (MAM) utilizing the Operating Profit to Total Cost (OP/TC)
+      profit level indicator (PLI).
+    - Transfer pricing mark-up on cost-plus software development services is benchmarked
+      at an arm's length range of 15% to 18% over operating expenditures.
+
+2.3 Mandatory Accountant's Report (Form 3CEB):
+    - Under Section 92E, the Company must obtain and electronically file a certified
+      Accountant's Report in **Form No. 3CEB** from an independent Chartered Accountant
+      on or before October 31 following the relevant assessment year.
+    - Failure to furnish Form 3CEB attracts a statutory penalty of ₹1,00,000 under
+      Section 271BA, plus penalties of 2% of the transaction value under Section 271AA
+      for failure to maintain mandated TP documentation.
+
+--------------------------------------------------------------------------------
+3. STATUTORY EXTERNAL AUDIT BY BIG 4 AUDITORS (COMPANIES ACT, 2013)
+--------------------------------------------------------------------------------
+3.1 Appointment & Auditor Independence:
+    - Pursuant to Section 139 of the Indian Companies Act, 2013, the Company's statutory
+      external audit is conducted exclusively by an empanelled **Big 4 Audit Firm**
+      (e.g., Deloitte Haskins & Sells, Ernst & Young / SR Batliboi, PwC / Price Waterhouse,
+      KPMG / BSR & Co.) appointed by the shareholders at the Annual General Meeting (AGM).
+    - Mandatory audit partner rotation is strictly enforced every five (5) consecutive
+      financial years under Section 139(2).
+
+3.2 Scope of Audit & Regulatory Compliance:
+    The external auditors conduct audits in compliance with:
+    a) Standards on Auditing (SAs) issued by the Institute of Chartered Accountants
+       of India (ICAI) and overseen by the National Financial Reporting Authority (NFRA);
+    b) Companies (Auditor's Report) Order, 2020 (CARO 2020) reporting requirements,
+       including verification of inventory, tangible assets, internal audit systems,
+       and statutory dues (PF, ESI, GST, TDS);
+    c) Section 143(3)(i) of the Companies Act, 2013 regarding adequacy and operating
+       effectiveness of Internal Financial Controls over Financial Reporting (IFC-FR).
+
+3.3 Non-Audit Services Prohibition:
+    Pursuant to Section 144 of the Companies Act, 2013, the statutory external audit
+    firm is strictly barred from providing internal audit, accounting, actuarial,
+    investment banking, or outsourced management services to the Company.
+
+--------------------------------------------------------------------------------
+4. CAPITAL EXPENDITURE (CAPEX) DELEGATION OF AUTHORITY (DoA) IN INR
+--------------------------------------------------------------------------------
+4.1 Monetary Authorization Limits:
+    Every Capital Expenditure Request (CER) must adhere to the following approval matrix:
+
+    ----------------------------------------------------------------------------
+    EXPENDITURE VALUE RANGE (INR)       MANDATORY APPROVAL AUTHORITIES
+    ----------------------------------------------------------------------------
+    Up to ₹5,00,000 INR                 Department Head & Financial Controller
+    ₹5,00,001 to ₹25,00,000 INR         VP of Department & Head of Finance
+    ₹25,00,001 to ₹1,00,00,000 INR      Chief Financial Officer (CFO) [MANDATORY]
+    Exceeding ₹1,00,00,000 INR (1 Cr+)  Chief Executive Officer (CEO) AND
+                                        Board of Directors Audit Committee Co-Sign
+    ----------------------------------------------------------------------------
+
+4.2 Invoicing and PO Compliance:
+    Splitting purchase orders or capital contracts to circumvent the ₹25,00,000 CFO
+    threshold or ₹1 Crore Board threshold constitutes severe financial non-compliance
+    resulting in immediate audit investigation and potential disciplinary termination.
+================================================================================

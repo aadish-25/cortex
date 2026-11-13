@@ -1,0 +1,124 @@
+================================================================================
+CORTEX TECHNOLOGIES INDIA ENTERPRISE POLICY DIRECTIVE
+DOCUMENT CODE: POL-HR-CONF-2026-011
+CLASSIFICATION: CONFIDENTIAL // STRICT RESTRICTED ACCESS
+DEPARTMENT: HUMAN RESOURCES & LEGAL COUNSEL
+SUBJECT: PREVENTION OF SEXUAL HARASSMENT (POSH ACT 2013), CODE OF CONDUCT, AND WHISTLEBLOWER PROTECTION
+EFFECTIVE DATE: JANUARY 15, 2026
+REVISION CYCLE: ANNUAL MANDATORY STATUTORY AUDIT
+================================================================================
+
+NOTICE:
+THIS DOCUMENT CONTAINS STATUTORY ADMINISTRATIVE PROTOCOLS AND CONFIDENTIAL LEGAL
+PROCEDURES PURSUANT TO THE LAWS OF INDIA. UNAUTHORIZED DUPLICATION, EXPORT, OR
+DISSEMINATION TO UNAUTHORIZED PERSONS IS STRICTLY PROHIBITED AND CONSTITUTES GROSS
+MISCONDUCT UNDER EMPLOYMENT REGULATIONS.
+
+--------------------------------------------------------------------------------
+SECTION 1: STATUTORY COMPLIANCE & THE POSH ACT, 2013
+--------------------------------------------------------------------------------
+1.1 Statutory Mandate:
+    Cortex Technologies India Private Limited enforces absolute compliance with the
+    Sexual Harassment of Women at Workplace (Prevention, Prohibition and Redressal)
+    Act, 2013 ("POSH Act"). The Company maintains a strict zero-tolerance policy
+    toward any form of sexual harassment, unwelcome physical contact, sexually
+    colored remarks, demand or request for sexual favors, showing pornography, or
+    any unwelcome physical, verbal, or non-verbal conduct of a sexual nature.
+
+1.2 Extended Workplace Scope:
+    Pursuant to Section 2(o) of the POSH Act, "workplace" encompasses:
+    a) All corporate office locations in Bengaluru, Mumbai, Gurugram, Hyderabad, and Pune;
+    b) Any location visited by the employee arising out of or during the course of
+       employment, including technical offsites, conferences, and transit;
+    c) Virtual digital workspaces, including Slack channels, Zoom meetings, GitHub PR
+       discussions, enterprise emails, and company social networking platforms;
+    d) Company guest houses, partnered hotels, and company-sponsored transport (cabs).
+
+--------------------------------------------------------------------------------
+SECTION 2: CONSTITUTION OF THE INTERNAL COMPLAINTS COMMITTEE (ICC)
+--------------------------------------------------------------------------------
+2.1 Committee Architecture (Section 4 of POSH Act):
+    The Company has constituted a permanent Internal Complaints Committee (ICC)
+    at every registered administrative facility. The ICC is composed of:
+    a) Presiding Officer: A woman employed at a senior managerial level (VP or Director);
+    b) Employee Members: Not less than two employee members preferably committed to
+       the cause of women or who have experience in social work or legal knowledge;
+    c) External Member: One independent member from a recognized Non-Governmental
+       Organization (NGO) or association committed to women's rights or a legal
+       expert conversant with sexual harassment issues;
+    d) Gender Composition: At least one-half (50%) of the total appointed members
+       of the ICC must be women at all times.
+
+2.2 Current ICC Leadership:
+    - Presiding Officer: Dr. Radhika Nair (VP, People & Culture, Bengaluru Hub)
+    - External Counsel Member: Adv. Meenakshi Sundaram (High Court of Karnataka / Human Rights Forum)
+    - Member Registry & Conciliation Desk: `icc-helpline@cortex.internal`
+
+--------------------------------------------------------------------------------
+SECTION 3: INQUIRY PROCESS & STATUTORY TIMELINES (SLA)
+--------------------------------------------------------------------------------
+3.1 Complaint Filing Window:
+    An aggrieved person may file a formal written complaint with the ICC within a
+    period of three (3) months from the date of the incident (extendable by up to
+    another three months if the ICC is satisfied that circumstances prevented earlier filing).
+
+3.2 Mandatory 90-Day Inquiry Completion SLA:
+    - Pursuant to Section 11 of the POSH Act, the ICC must initiate and conclude its
+      formal inquiry within a strict statutory timeframe of **ninety (90) calendar days**
+      from the date of receipt of the formal complaint.
+    - Principles of natural justice and fair opportunity to be heard will be accorded
+      to both the complainant and the respondent.
+    - The ICC holds the same powers as vested in a Civil Court under the Code of Civil
+      Procedure, 1908, when summoning persons, examining witnesses under oath, and
+      demanding discovery or production of documents.
+
+3.3 Report Submission & Employer Implementation:
+    - Within ten (10) calendar days of concluding the inquiry, the ICC must submit its
+      formal inquiry findings and recommendations report to the Executive Board and
+      the District Officer (DO).
+    - The Company must implement the recommended disciplinary or remedial action
+      within sixty (60) calendar days of receipt of the ICC report.
+
+3.4 Strict Confidentiality & Penalty for Disclosure (Section 16):
+    The identity and address of the aggrieved woman, respondent, and witnesses, as
+    well as any inquiry proceedings and recommendations, must not be published,
+    communicated, or made known to the public, press, or media in any manner. Any
+    person breaching confidentiality is subject to a statutory monetary penalty of
+    ₹5,000, immediate disciplinary removal, and legal prosecution.
+
+--------------------------------------------------------------------------------
+SECTION 4: INTERIM RELIEF & DISCIPLINARY SANCTIONS
+--------------------------------------------------------------------------------
+4.1 Interim Relief Measures:
+    During the pendency of an ICC inquiry, upon written request of the complainant,
+    the ICC may recommend:
+    a) Transfer of the complainant or the respondent to another department or city office;
+    b) Grant of paid leave to the complainant up to a period of three (3) months
+       (in addition to regular leave entitlements);
+    c) Restraining the respondent from reporting on or evaluating the complainant's performance.
+
+4.2 Disciplinary Actions upon Substantiated Harassment:
+    Depending on the severity of the offense, sanctions include:
+    a) Written reprimand and formal censure placed permanently on HR records;
+    b) Withholding of promotions, increments, or performance-linked bonuses;
+    c) Immediate termination of employment for gross misconduct without notice;
+    d) Monetary deduction from salary/wages for compensation payable to the victim;
+    e) Criminal complaints filed with jurisdictional police stations under the
+       Bharatiya Nyaya Sanhita (BNS) / relevant criminal statutes.
+
+--------------------------------------------------------------------------------
+SECTION 5: WHISTLEBLOWER INTEGRITY & ANTI-RETALIATION SHIELD
+--------------------------------------------------------------------------------
+5.1 Protected Disclosures:
+    Employees may report unethical conduct, financial fraud, corruption, bribery,
+    or statutory non-compliance through the Confidential Whistleblower Hotline
+    (`whistleblower@cortex.internal` or anonymous portal).
+
+5.2 Anti-Retaliation Policy:
+    Cortex strictly prohibits any form of retaliation, adverse performance review,
+    threat of termination, demotion, transfer, or informal harassment against any
+    employee who in good faith reports a violation, files a POSH complaint, or
+    participates as a witness in an ICC inquiry.
+    Any managerial retaliation is treated as a severe independent violation warranting
+    immediate dismissal.
+================================================================================
