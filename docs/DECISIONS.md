@@ -37,7 +37,7 @@ Consequence: two databases to manage. PostgreSQL owns relational state; Qdrant o
 
 Access control is enforced on three dimensions simultaneously:
 
-1. **Role** — `Admin | Manager | Employee | Auditor`
+1. **Role** — `Admin | Manager | Employee`
 2. **Department** — string, e.g. `"Engineering"`, `"HR"`
 3. **ClearanceLevel** — `Public < Internal < Confidential`
 
