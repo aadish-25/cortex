@@ -35,5 +35,6 @@ async def health_check():
 
 
 # Register Routers
-from backend.routers import auth
+from backend.routers import auth, users
 app.include_router(auth.router)
+app.include_router(users.router)

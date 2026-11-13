@@ -77,9 +77,13 @@ async def authenticate_user(
     return user, access_token
 
 
-async def revoke_user_sessions(session: AsyncSession, user_id: uuid.UUID) -> User:
+async def revoke_user_sessions(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    revoked_by: Optional[uuid.UUID] = None,
+) -> User:
     """
-    Instantly revoke all active JWT tokens for a user by incrementing token_version (D18).
+    Instantly revoke all active JWT tokens for a user by setting token_version = -1 (D18).
     """
     statement = select(User).where(User.id == user_id)
     result = await session.execute(statement)
@@ -91,8 +95,8 @@ async def revoke_user_sessions(session: AsyncSession, user_id: uuid.UUID) -> Use
             detail="User not found",
         )
 
-    # Incrementing token_version invalidates any existing token with the old version
-    user.token_version += 1
+    # Set token_version to -1 per D18 specification
+    user.token_version = -1
     session.add(user)
     await session.commit()
     await session.refresh(user)
@@ -100,10 +104,10 @@ async def revoke_user_sessions(session: AsyncSession, user_id: uuid.UUID) -> Use
     await log_audit_event(
         session=session,
         event_tag="AUTH_SESSIONS_REVOKED",
-        category=AuditCategory.AUTH,
-        user_id=user.id,
+        category=AuditCategory.ADMIN,
+        user_id=revoked_by or user.id,
         status_code=200,
-        details=f"All active sessions revoked (new token_version: {user.token_version})",
+        details=f"Admin {revoked_by} revoked sessions for user {user.username} (token_version set to -1)",
     )
 
     return user

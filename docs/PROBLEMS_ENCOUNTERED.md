@@ -91,3 +91,13 @@ __tablename__: ClassVar[str] = "users"
 **Fix:** Compute `BASE_DIR = Path(__file__).resolve().parent.parent` in `backend/config.py` and set `env_file=ENV_FILE if ENV_FILE.exists() else ".env"`.
 
 ---
+
+## 9. Pylance Cannot Access Attribute `desc` on SQLModel Field
+
+**Symptom:** `Cannot access attribute "desc" for class "datetime". Attribute "desc" is unknown.` on `User.created_at.desc()`.
+
+**Cause:** Pylance sees `User.created_at` statically as the Python `datetime` class (from its type annotation), which does not have a `.desc()` method, even though SQLAlchemy instruments it at runtime.
+
+**Fix:** Wrap the field in SQLModel's official `col()` helper: `col(User.created_at).desc()`.
+
+---

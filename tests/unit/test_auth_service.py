@@ -50,10 +50,9 @@ async def test_login_nonexistent_user(db_session: AsyncSession):
 @pytest.mark.asyncio
 async def test_token_version_revocation(db_session: AsyncSession):
     user, _ = await authenticate_user(db_session, "manager_eng", "manager123")
-    initial_version = user.token_version
 
     updated_user = await revoke_user_sessions(db_session, user.id)
-    assert updated_user.token_version == initial_version + 1
+    assert updated_user.token_version == -1
 
     # Restore version back to 1 for database consistency
     updated_user.token_version = 1
