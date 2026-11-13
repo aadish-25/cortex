@@ -248,3 +248,12 @@ Password is explicitly truncated to 72 bytes before hashing to conform to the bc
 `jira_key` column exists in the `tickets` table as a nullable field for future use. Actual Jira API integration is out of scope for this submission. Tickets go to `OUTBOX_PENDING` state and stay there.
 
 ---
+
+## D23 — Modular Administrative User Provisioning
+
+User creation, role assignment, department allocation, and clearance modifications are strictly restricted to authorized administrative roles to prevent unauthorized privilege escalation:
+- Current authorized role: `Role.ADMIN`
+- Enforced via a modular role set (`USER_MANAGEMENT_ROLES = {Role.ADMIN}`) and dependency (`require_roles` / `require_user_manager`) rather than ad-hoc inline conditional logic.
+- Adding future privileged personas (e.g. `IT_ADMIN`, `OPERATIONS_MANAGER`) requires only adding the role enum to `USER_MANAGEMENT_ROLES` without altering endpoint implementations.
+
+---

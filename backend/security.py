@@ -39,9 +39,13 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     if expires_delta:
         expire = datetime.now(timezone.utc) + expires_delta
     else:
-        expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        expire = datetime.now(timezone.utc) + timedelta(
+            minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
+        )
     to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+    encoded_jwt = jwt.encode(
+        to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM
+    )
     return encoded_jwt
 
 
@@ -69,15 +73,17 @@ async def get_current_user(
             settings.JWT_SECRET_KEY,
             algorithms=[settings.JWT_ALGORITHM],
         )
-        user_id_str: str = payload.get("sub")
-        token_version: int = payload.get("token_version")
-        if not user_id_str or token_version is None:
+        user_id_raw = payload.get("sub")
+        token_version_raw = payload.get("token_version")
+
+        if not isinstance(user_id_raw, str) or not isinstance(token_version_raw, int):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid token payload",
             )
-        user_id = uuid.UUID(user_id_str)
-    except (jwt.PyJWTError, ValueError):
+        user_id = uuid.UUID(user_id_raw)
+        token_version = token_version_raw
+    except jwt.PyJWTError, ValueError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",
@@ -110,6 +116,11 @@ async def get_current_user(
     return user
 
 
+# Modular role sets for administrative operations (D23)
+# Can add other roles later who can to user management such as create=ing an user and assigning them roles and permissions
+USER_MANAGEMENT_ROLES = {Role.ADMIN}
+
+
 def require_roles(*allowed_roles: Role):
     async def role_checker(current_user: User = Depends(get_current_user)) -> User:
         if current_user.role not in allowed_roles:
@@ -120,3 +131,13 @@ def require_roles(*allowed_roles: Role):
         return current_user
 
     return role_checker
+
+
+async def require_user_manager(current_user: User = Depends(get_current_user)) -> User:
+    """Modular guard: checks if user has administrative provisioning privileges (D23)."""
+    if current_user.role not in USER_MANAGEMENT_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrative privileges required to manage users",
+        )
+    return current_user
