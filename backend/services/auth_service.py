@@ -1,5 +1,5 @@
 import uuid
-from typing import Tuple
+from typing import Tuple, Optional
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
