@@ -21,6 +21,8 @@ cortex.db
 # Frontend dependencies and builds
 frontend/node_modules/
 frontend/dist/
+frontend-experiments/
+scripts/
 
 # OS and IDE files
 .DS_Store

@@ -3,7 +3,7 @@ from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 
-from backend.config import BASE_DIR, settings
+from backend.core.config import BASE_DIR, settings
 
 # Ensure relative SQLite path resolves relative to project root
 db_url = settings.DATABASE_URL

@@ -8,8 +8,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from backend.config import settings
-from backend.database import get_db
+from backend.core.config import settings
+from backend.db.database import get_db
 from backend.models.enums import Role
 from backend.models.user import User
 

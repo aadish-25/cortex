@@ -184,7 +184,7 @@ async def test_admin_revoke_user_sessions():
             headers={"Authorization": f"Bearer {admin_token}"},
             json={"is_active": True},
         )
-        from backend.database import async_session
+        from backend.db.database import async_session
         from backend.models.user import User
         from sqlmodel import select
         async with async_session() as session:
