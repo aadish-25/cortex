@@ -22,7 +22,7 @@ cortex.db
 frontend/node_modules/
 frontend/dist/
 frontend-experiments/
-scripts/
+scripts/capture_*.py
 
 # OS and IDE files
 .DS_Store
