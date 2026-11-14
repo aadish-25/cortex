@@ -119,6 +119,7 @@ async def get_current_user(
 # Modular role sets for administrative operations (D23)
 # Can add other roles later who can to user management such as create=ing an user and assigning them roles and permissions
 USER_MANAGEMENT_ROLES = {Role.ADMIN}
+DOCUMENT_MANAGEMENT_ROLES = {Role.ADMIN, Role.MANAGER}
 
 
 def require_roles(*allowed_roles: Role):
@@ -139,5 +140,15 @@ async def require_user_manager(current_user: User = Depends(get_current_user)) -
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Administrative privileges required to manage users",
+        )
+    return current_user
+
+
+async def require_document_manager(current_user: User = Depends(get_current_user)) -> User:
+    """Modular guard: checks if user has document management privileges (Admin or Manager)."""
+    if current_user.role not in DOCUMENT_MANAGEMENT_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrative or Managerial privileges required to manage documents",
         )
     return current_user
