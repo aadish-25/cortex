@@ -1,3 +1,4 @@
+import uuid
 import pytest
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,8 +8,6 @@ from backend.models.audit import AuditLog
 from backend.models.document import Document
 from backend.models.enums import ClearanceLevel, DocumentStatus
 from backend.services.document_service import compute_file_hash, register_document_upload
-
-# Note: `db_session` fixture is automatically injected by pytest from tests/conftest.py
 
 
 def test_compute_file_hash():
@@ -21,10 +20,13 @@ def test_compute_file_hash():
 
 @pytest.mark.asyncio
 async def test_register_new_document(db_session: AsyncSession):
-    content = b"Welcome to Engineering Policy 2026"
+    uid = uuid.uuid4().hex[:8]
+    content = f"Welcome to Engineering Policy {uid}".encode()
+    filename = f"test_eng_policy_{uid}.md"
+
     doc, is_new_version = await register_document_upload(
         session=db_session,
-        filename="test_eng_policy.md",
+        filename=filename,
         content=content,
         department="Engineering",
         clearance_level=ClearanceLevel.INTERNAL,
@@ -40,11 +42,13 @@ async def test_register_new_document(db_session: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_register_duplicate_hash_rejected(db_session: AsyncSession):
-    content = b"Unique Content for Deduplication Test"
+    uid = uuid.uuid4().hex[:8]
+    content = f"Unique Content for Deduplication Test {uid}".encode()
+
     # First upload
     await register_document_upload(
         session=db_session,
-        filename="first_doc.txt",
+        filename=f"first_doc_{uid}.txt",
         content=content,
         department="HR",
         clearance_level=ClearanceLevel.INTERNAL,
@@ -54,7 +58,7 @@ async def test_register_duplicate_hash_rejected(db_session: AsyncSession):
     with pytest.raises(HTTPException) as exc_info:
         await register_document_upload(
             session=db_session,
-            filename="second_doc_copy.txt",
+            filename=f"second_doc_copy_{uid}.txt",
             content=content,
             department="HR",
             clearance_level=ClearanceLevel.INTERNAL,
@@ -65,13 +69,15 @@ async def test_register_duplicate_hash_rejected(db_session: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_register_new_version_same_filename(db_session: AsyncSession):
-    v1_content = b"Version 1 Content"
-    v2_content = b"Version 2 Updated Content"
+    uid = uuid.uuid4().hex[:8]
+    filename = f"versioned_policy_{uid}.md"
+    v1_content = f"Version 1 Content {uid}".encode()
+    v2_content = f"Version 2 Updated Content {uid}".encode()
 
     # Upload Version 1
     doc_v1, is_v1_new = await register_document_upload(
         session=db_session,
-        filename="versioned_policy.md",
+        filename=filename,
         content=v1_content,
         department="Finance",
         clearance_level=ClearanceLevel.CONFIDENTIAL,
@@ -82,7 +88,7 @@ async def test_register_new_version_same_filename(db_session: AsyncSession):
     # Upload Version 2 with same filename but new content (D4)
     doc_v2, is_v2_new = await register_document_upload(
         session=db_session,
-        filename="versioned_policy.md",
+        filename=filename,
         content=v2_content,
         department="Finance",
         clearance_level=ClearanceLevel.CONFIDENTIAL,
@@ -95,10 +101,13 @@ async def test_register_new_version_same_filename(db_session: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_document_audit_log_created(db_session: AsyncSession):
-    content = b"Audit logging test document bytes"
+    uid = uuid.uuid4().hex[:8]
+    content = f"Audit logging test document bytes {uid}".encode()
+    filename = f"audit_test_doc_{uid}.md"
+
     doc, _ = await register_document_upload(
         session=db_session,
-        filename="audit_test_doc.md",
+        filename=filename,
         content=content,
         department="Engineering",
         clearance_level=ClearanceLevel.INTERNAL,
