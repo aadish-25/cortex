@@ -230,6 +230,14 @@ else:
     )
 ```
 
+#### 3.3.1 Zero-Knowledge Information Leakage & Locked Document Governance
+To preserve complete corporate secrecy during document updates:
+1. **Zero-Knowledge Pre-Filtering**: When a document is locked or undergoing revision, unauthorized employees never receive a notice that the document exists or is updating. Because Qdrant's 3D RBAC filter executes before semantic scoring, unprivileged chunks are dropped immediately. An employee searching for unauthorized confidential policies receives standard "no relevant information found" without leaking metadata.
+2. **Authorized User Interception & Content Quarantine**: If an **authorized** user's query semantically matches a locked/updating document:
+   - The retrieval engine identifies the document's lock status (`is_locked=True` or `DocumentStatus.UPDATING`).
+   - **Strict Content Quarantine**: Zero raw text from the locked document is injected into the LLM context, preventing unverified or incomplete policies from generating answers.
+   - The system intercepts the request and emits a formal governance advisory citing the document title and active revision status (e.g., *"The document '[Title]' covering this policy is currently locked while updating to Version [V]. Access is temporarily suspended. Please try again shortly."*).
+
 ### 3.4 Authentication & Dual Identifier Login
 - **Identifiers**: Users may authenticate using either their system `username` (e.g., `admin`, `manager_eng`) or corporate `email` (`admin@cortex.local`).
 - **Password Security (Decision D20)**: Directly powered by native `bcrypt`. To prevent `passlib` incompatibility with Python 3.14, Cortex uses native `bcrypt.hashpw` and `bcrypt.checkpw`. Passwords are explicitly truncated to **72 bytes** prior to hashing, strictly complying with the bcrypt algorithm specification.
@@ -333,8 +341,13 @@ stateDiagram-v2
    ```sql
    UPDATE documents SET status = 'UPDATING' WHERE id = :id AND status != 'UPDATING';
    ```
-3. **Staged Version Swap**: The existing version is locked (`is_live = False`). New chunks are embedded and indexed into Qdrant with `is_live = False`.
-4. **Atomic Flip**: Once Qdrant indexing is confirmed, the new document row is updated to `is_live = True, status = ACTIVE`, and old chunks are cleanly purged from Qdrant. There is zero window where an employee receives partial or empty query results.
+3. **Staged Version Swap & Admin Governance Modes**:
+   - **Mode A (Graceful Rollout - Default)**: Existing version chunks remain searchable (`is_live = True`) while the new version is embedded in the background (`is_live = False`). Upon retrieval, the engine detects `Document.status == UPDATING` and attaches an advisory banner stating that a newer version is being processed.
+   - **Mode B (Strict Quarantine)**: The admin immediately marks the prior version as locked (`is_live = False` / `status = LOCKED`). If an authorized user searches for it, zero raw text is passed to the LLM, and the system issues a temporary unavailability notice.
+4. **Set-Theoretic Atomic Flip & Purge**: Once Qdrant indexing is confirmed for `new_version`:
+   - Step 1: `client.set_payload(payload={"is_live": True}, filter=must[document_id==id, version==new_version])`.
+   - Step 2: `client.delete(filter=must[document_id==id], must_not[version==new_version])`.
+   - Deleting everything where `version != new_version` purges older versions (v1, v2, etc.) and sweeps away any aborted draft artifacts in a single server-side operation. Zero synchronization state or tracking of individual old version integers is required.
 
 ---
 
@@ -603,6 +616,26 @@ To prevent employees from spamming corporate ticketing queues with non-work inqu
 - The Action Feasibility Guard evaluates drafted action intents prior to card generation.
 - Queries unrelated to enterprise operations (e.g., *"My coffee is cold, raise a ticket"*, *"Order pizza for the team"*, *"Fix the traffic outside"*) are **cleanly refused**:
   > *"I cannot raise an official ticket for this request. Official tickets are restricted to operational incidents, service requests, policy inquiries, and formal workplace disputes."*
+
+### 8.4 Standardized Ticket Template & Dynamic Schema Introspection
+To eliminate ambiguous or ad-hoc ticket generation across varying enterprise departments, Cortex enforces domain-driven ticket structuring coupled with dynamic schema discovery:
+
+#### 8.4.1 Base Universal Ticket Schema
+Regardless of domain (`Engineering`, `IT`, `HR`, `Finance`), every ticket conforms to a baseline contract before submission:
+- `domain`: Explicit operational sphere (`IT`, `HR`, `FINANCE`, `ENGINEERING`).
+- `project_key`: Target service desk queue (`ITSD`, `HRSD`, `FIN`, `ENG`).
+- `issue_type`: Universal taxonomy tier (`INCIDENT`, `SERVICE_REQUEST`, `INQUIRY`, `DISPUTE`).
+- `summary`: Concise, one-line title describing the action.
+- `description`: Structured operational brief detailing requester background, business rationale, and context.
+- `requester_email`: Authenticated employee email (auto-populated from JWT).
+- `priority`: Calibrated SLA urgency (`LOW`, `MEDIUM`, `HIGH`, `CRITICAL`).
+- `domain_fields`: Key-value payload of domain-specific parameters (e.g., `budget_cap`, `device_model`, `expense_receipt_id`, `leave_start_date`).
+
+#### 8.4.2 Dynamic Field Introspection (MCP vs. REST API)
+To handle organization-specific Jira custom fields without hardcoded guesswork:
+1. **Atlassian MCP Mode**: When running with the Jira MCP server, the agent invokes discovery tools (e.g., `get_issue_createmeta` or request type schema inspectors) at runtime to inspect required field keys, data types, and enum options for the selected service desk queue.
+2. **Atlassian REST API v3 Mode**: When integrating via raw REST client, the agent queries `GET /rest/api/3/issue/createmeta/{projectIdOrKey}/issuetypes/{issueTypeId}` to retrieve the authoritative JSON schema of mandatory fields before generating the interactive HITL action card.
+3. **Resilient Fallback Templates**: If external schema introspection is offline or unauthenticated, the system falls back to standard domain schema defaults defined in `backend/core/jira_templates.py`.
 
 ---
 
