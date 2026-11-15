@@ -1,8 +1,8 @@
 from pathlib import Path
 import pytest
 
-from backend.services.chunking_service import chunk_sections, stamp_identity_header
-from backend.services.ingestion_service import parse_docx, parse_file, parse_markdown, parse_text
+from backend.services.ingestion.chunking_service import chunk_sections, stamp_identity_header
+from backend.services.ingestion.ingestion_service import parse_docx, parse_file, parse_markdown, parse_text
 
 SAMPLE_DOCS_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "sample_documents"
 

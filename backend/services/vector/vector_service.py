@@ -7,8 +7,8 @@ from qdrant_client import QdrantClient, models
 from backend.core.config import settings
 from backend.models.enums import ClearanceLevel
 from backend.db.qdrant import init_qdrant_collection
-from backend.services.chunking_service import DocumentChunk
-from backend.services.embedding_service import (
+from backend.services.ingestion.chunking_service import DocumentChunk
+from backend.services.vector.embedding_service import (
     generate_dense_embeddings,
     generate_sparse_embeddings,
 )

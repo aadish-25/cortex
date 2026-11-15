@@ -5,7 +5,7 @@ from sqlmodel import select
 
 from backend.models.audit import AuditLog
 from backend.models.enums import Role
-from backend.services.auth_service import authenticate_user, revoke_user_sessions
+from backend.services.auth.auth_service import authenticate_user, revoke_user_sessions
 
 # Note: The `db_session` fixture parameter used across these tests is automatically
 # discovered and injected by pytest from tests/conftest.py (no manual import needed).

@@ -7,7 +7,7 @@ from sqlmodel import select
 from backend.models.enums import AuditCategory
 from backend.models.user import User
 from backend.core.security import create_access_token, verify_password
-from backend.services.audit_service import log_audit_event
+from backend.services.auth.audit_service import log_audit_event
 
 
 async def authenticate_user(

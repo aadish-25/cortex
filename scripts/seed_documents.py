@@ -14,15 +14,15 @@ from backend.db.database import async_session, init_db
 from backend.db.qdrant import get_qdrant_client, init_qdrant_collection
 from backend.models.document import Document
 from backend.models.enums import ClearanceLevel, DocumentStatus
-from backend.services.chunking_service import chunk_sections
-from backend.services.document_service import (
+from backend.services.ingestion.chunking_service import chunk_sections
+from backend.services.ingestion.document_service import (
     compute_file_hash,
     finalize_document_activation,
     mark_document_failed,
     register_document_upload,
 )
-from backend.services.ingestion_service import parse_file
-from backend.services.vector_service import (
+from backend.services.ingestion.ingestion_service import parse_file
+from backend.services.vector.vector_service import (
     activate_document_version,
     index_document_chunks,
 )

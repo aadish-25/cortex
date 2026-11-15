@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import List, Optional
 
-from backend.services.ingestion_service import ParsedSection
+from backend.services.ingestion.ingestion_service import ParsedSection
 
 
 @dataclass

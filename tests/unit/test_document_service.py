@@ -7,7 +7,7 @@ from sqlmodel import col, select
 from backend.models.audit import AuditLog
 from backend.models.document import Document
 from backend.models.enums import ClearanceLevel, DocumentStatus
-from backend.services.document_service import compute_file_hash, register_document_upload
+from backend.services.ingestion.document_service import compute_file_hash, register_document_upload
 
 
 def test_compute_file_hash():

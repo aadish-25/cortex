@@ -7,13 +7,13 @@ from qdrant_client import QdrantClient, models
 from backend.core.config import settings
 from backend.models.enums import CLEARANCE_RANK, ClearanceLevel, Role
 from backend.models.user import User
-from backend.services.reranker_service import (
+from backend.services.retrieval.reranker_service import (
     ConfidenceLevel,
     ScoredChunk,
     classify_confidence,
     rerank_chunks,
 )
-from backend.services.vector_service import (
+from backend.services.vector.vector_service import (
     generate_dense_embeddings,
     generate_sparse_embeddings,
 )

@@ -4,12 +4,12 @@ from qdrant_client import models
 
 from backend.models.enums import ClearanceLevel, Role
 from backend.models.user import User
-from backend.services.reranker_service import (
+from backend.services.retrieval.reranker_service import (
     ConfidenceLevel,
     classify_confidence,
     rerank_chunks,
 )
-from backend.services.retrieval_service import (
+from backend.services.retrieval.retrieval_service import (
     FALLBACK_STRING,
     build_3d_rbac_filter,
     reciprocal_rank_fusion,

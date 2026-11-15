@@ -4,28 +4,37 @@ from qdrant_client import QdrantClient, models
 
 from backend.models.enums import ClearanceLevel
 from backend.db.qdrant import get_qdrant_client, init_qdrant_collection
-from backend.services.chunking_service import DocumentChunk
-from backend.services.embedding_service import (
+from backend.services.ingestion.chunking_service import DocumentChunk
+from backend.services.vector.embedding_service import (
     generate_dense_embeddings,
     generate_sparse_embeddings,
 )
-from backend.services.vector_service import (
+from backend.services.vector.vector_service import (
     activate_document_version,
     index_document_chunks,
 )
 
 
 @pytest.fixture
-def memory_qdrant():
-    """Provides an isolated, in-memory Qdrant client for fast and independent unit testing."""
-    client = QdrantClient(":memory:")
-    init_qdrant_collection(client, collection_name="test_cortex_collection")
-    return client
+def docker_qdrant():
+    """
+    Connects to the live Dockerized Qdrant container running on port 6333.
+    Creates an isolated test collection and cleanly purges it after each test.
+    """
+    client = get_qdrant_client()
+    test_collection = f"test_cortex_{uuid.uuid4().hex[:8]}"
+    init_qdrant_collection(client, collection_name=test_collection)
+    yield client, test_collection
+    try:
+        client.delete_collection(test_collection)
+    except Exception:
+        pass
 
 
-def test_qdrant_collection_creation(memory_qdrant: QdrantClient):
+def test_qdrant_collection_creation(docker_qdrant):
     """Verifies that the collection has both Dense (384d) and Sparse BM25 vector configs."""
-    info = memory_qdrant.get_collection("test_cortex_collection")
+    client, test_collection = docker_qdrant
+    info = client.get_collection(test_collection)
     assert info is not None
     # Check dense vector config
     assert "dense" in info.config.params.vectors
@@ -52,11 +61,12 @@ def test_dense_and_sparse_embedding_generation():
     assert len(sparse_vecs[0].values) == len(sparse_vecs[0].indices)
 
 
-def test_index_document_chunks_staged_version_flip(memory_qdrant: QdrantClient):
+def test_index_document_chunks_staged_version_flip(docker_qdrant):
     """
     Verifies that chunks are initially indexed with is_live=False (Decision D4)
     and contain all 3D RBAC payload fields.
     """
+    client, test_collection = docker_qdrant
     doc_id = uuid.uuid4()
     chunks = [
         DocumentChunk(
@@ -69,20 +79,20 @@ def test_index_document_chunks_staged_version_flip(memory_qdrant: QdrantClient):
     ]
 
     count = index_document_chunks(
-        client=memory_qdrant,
+        client=client,
         document_id=doc_id,
         version=1,
         department="Engineering",
         clearance_level=ClearanceLevel.INTERNAL,
         chunks=chunks,
         is_live=False,
-        collection_name="test_cortex_collection",
+        collection_name=test_collection,
     )
     assert count == 1
 
     # Verify points stored in Qdrant
-    res = memory_qdrant.scroll(
-        collection_name="test_cortex_collection",
+    res = client.scroll(
+        collection_name=test_collection,
         scroll_filter=models.Filter(
             must=[
                 models.FieldCondition(
@@ -103,12 +113,13 @@ def test_index_document_chunks_staged_version_flip(memory_qdrant: QdrantClient):
     assert "₹2,500" in p.payload["text"]
 
 
-def test_activate_document_version_and_purge_old(memory_qdrant: QdrantClient):
+def test_activate_document_version_and_purge_old(docker_qdrant):
     """
     Verifies Decision D4 staged version flip switchover:
     - Activating Version 2 sets is_live=True for v2.
     - Purges Version 1 chunks so no stale duplicates remain.
     """
+    client, test_collection = docker_qdrant
     doc_id = uuid.uuid4()
 
     # Index Version 1 (currently live)
@@ -122,14 +133,14 @@ def test_activate_document_version_and_purge_old(memory_qdrant: QdrantClient):
         )
     ]
     index_document_chunks(
-        client=memory_qdrant,
+        client=client,
         document_id=doc_id,
         version=1,
         department="HR",
         clearance_level=ClearanceLevel.INTERNAL,
         chunks=v1_chunks,
         is_live=True,  # Old version was live
-        collection_name="test_cortex_collection",
+        collection_name=test_collection,
     )
 
     # Index Version 2 (staged, is_live=False)
@@ -143,30 +154,30 @@ def test_activate_document_version_and_purge_old(memory_qdrant: QdrantClient):
         )
     ]
     index_document_chunks(
-        client=memory_qdrant,
+        client=client,
         document_id=doc_id,
         version=2,
         department="HR",
         clearance_level=ClearanceLevel.INTERNAL,
         chunks=v2_chunks,
         is_live=False,  # New version staged
-        collection_name="test_cortex_collection",
+        collection_name=test_collection,
     )
 
     # Pre-check: 2 points exist in Qdrant (1 live, 1 staged)
-    all_points, _ = memory_qdrant.scroll("test_cortex_collection", limit=10)
+    all_points, _ = client.scroll(test_collection, limit=10)
     assert len(all_points) == 2
 
     # Execute atomic version activation (D4)
     activate_document_version(
-        client=memory_qdrant,
+        client=client,
         document_id=doc_id,
         active_version=2,
-        collection_name="test_cortex_collection",
+        collection_name=test_collection,
     )
 
     # Post-check: Only Version 2 remains, and is_live is flipped to True
-    remaining_points, _ = memory_qdrant.scroll("test_cortex_collection", limit=10)
+    remaining_points, _ = client.scroll(test_collection, limit=10)
     assert len(remaining_points) == 1
     assert remaining_points[0].payload["version"] == 2
     assert remaining_points[0].payload["is_live"] is True

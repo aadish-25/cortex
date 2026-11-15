@@ -1,10 +1,16 @@
 from datetime import datetime, timezone
-from typing import ClassVar, Optional
+from enum import Enum
+from typing import Any, ClassVar, Dict, List, Optional
 import uuid
+from pydantic import BaseModel
 from sqlmodel import Field, SQLModel
 
 from backend.models.enums import FeedbackCategory
 
+
+# ==========================================
+# Database Table Models (SQLModel)
+# ==========================================
 
 class Conversation(SQLModel, table=True):
     __tablename__: ClassVar[str] = "conversations"
@@ -44,3 +50,44 @@ class MessageFeedback(SQLModel, table=True):
     category: Optional[FeedbackCategory] = Field(default=None)
     comment: Optional[str] = Field(default=None)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+# ==========================================
+# Conversational Planning & DAG Models (Pydantic)
+# ==========================================
+
+class ChatRole(str, Enum):
+    USER = "user"
+    ASSISTANT = "assistant"
+    SYSTEM = "system"
+
+
+class ChatMessage(BaseModel):
+    role: ChatRole
+    content: str
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class PlanTaskType(str, Enum):
+    INTERNAL_RAG = "INTERNAL_RAG"          # Qdrant 3D RBAC knowledge search
+    EXTERNAL_WEB = "EXTERNAL_WEB"          # Sanitized external search
+    STRUCTURED_LOOKUP = "STRUCTURED_LOOKUP"# Parameterized SQL queries (Phase 4)
+    ACTION_WORKFLOW = "ACTION_WORKFLOW"    # HITL Jira ticketing (Phase 4)
+    DIRECT_CHAT = "DIRECT_CHAT"            # Chit-chat, greetings, clarifications
+
+
+class PlanTask(BaseModel):
+    id: int
+    type: PlanTaskType
+    query: str
+    depends_on: List[int] = Field(default_factory=list)
+    status: str = "PENDING"
+    output: Optional[Any] = None
+    citations: List[str] = Field(default_factory=list)
+
+
+class ExecutionPlan(BaseModel):
+    tasks: List[PlanTask]
+    original_query: str
+    rewritten_query: Optional[str] = None
+    was_rewritten: bool = False

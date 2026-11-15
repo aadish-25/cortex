@@ -7,8 +7,8 @@ from backend.core.security import get_current_user
 from backend.db.database import get_db
 from backend.models.enums import AuditCategory
 from backend.models.user import User, UserRead
-from backend.services.audit_service import log_audit_event
-from backend.services.auth_service import authenticate_user
+from backend.services.auth.audit_service import log_audit_event
+from backend.services.auth.auth_service import authenticate_user
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 

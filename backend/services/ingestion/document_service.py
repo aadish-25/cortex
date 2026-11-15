@@ -11,7 +11,7 @@ from backend.core.config import settings
 from backend.models.document import Document
 from backend.models.enums import AuditCategory, CLEARANCE_RANK, ClearanceLevel, DocumentStatus, Role
 from backend.models.user import User
-from backend.services.audit_service import log_audit_event
+from backend.services.auth.audit_service import log_audit_event
 
 
 def compute_file_hash(content: bytes) -> str:

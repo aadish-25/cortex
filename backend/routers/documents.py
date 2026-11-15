@@ -10,8 +10,8 @@ from backend.db.qdrant import get_qdrant_client
 from backend.models.document import DocumentRead
 from backend.models.enums import ClearanceLevel, Role
 from backend.models.user import User
-from backend.services.chunking_service import chunk_sections
-from backend.services.document_service import (
+from backend.services.ingestion.chunking_service import chunk_sections
+from backend.services.ingestion.document_service import (
     delete_document,
     finalize_document_activation,
     get_document_by_id,
@@ -19,8 +19,8 @@ from backend.services.document_service import (
     mark_document_failed,
     register_document_upload,
 )
-from backend.services.ingestion_service import parse_file
-from backend.services.vector_service import (
+from backend.services.ingestion.ingestion_service import parse_file
+from backend.services.vector.vector_service import (
     activate_document_version,
     index_document_chunks,
 )

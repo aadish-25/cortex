@@ -9,8 +9,8 @@ from backend.core.security import hash_password, require_user_manager
 from backend.db.database import get_db
 from backend.models.enums import AuditCategory
 from backend.models.user import User, UserCreate, UserRead, UserUpdate
-from backend.services.audit_service import log_audit_event
-from backend.services.auth_service import revoke_user_sessions
+from backend.services.auth.audit_service import log_audit_event
+from backend.services.auth.auth_service import revoke_user_sessions
 
 router = APIRouter(prefix="/api/v1/users", tags=["users"])
 
