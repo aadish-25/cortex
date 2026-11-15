@@ -20,8 +20,44 @@ class Settings(BaseSettings):
     QDRANT_API_KEY: str = ""
     JWT_SECRET_KEY: str
     JWT_ALGORITHM: str
+    # Provider Multi-Key Rotation Pools (Priority: Groq -> OpenRouter -> Gemini)
+    GROQ_API_KEYS: str = ""
+    OPENROUTER_API_KEYS: str = ""
+    GEMINI_API_KEYS: str = ""
+
+    GROQ_API_KEY: str = ""
+    OPENROUTER_API_KEY: str = ""
     GEMINI_API_KEY: str = ""
+    ANTHROPIC_API_KEY: str = ""
+    OPENAI_API_KEY: str = ""
+    META_API_KEY: str = ""
     JINA_API_KEY: str = ""
+
+    # Provider Default Models
+    GROQ_DEFAULT_MODEL: str = "groq/qwen/qwen3.8-27b"
+    OPENROUTER_DEFAULT_MODEL: str = "openrouter/nvidia/nemotron-3.5-lightning:free"
+    GEMINI_DEFAULT_MODEL: str = "gemini/gemini-2.5-flash"
+
+    # LLM Gateway & Active Provider Configuration
+    DEFAULT_LLM_PROVIDER: str = "groq"
+    DEFAULT_LLM_MODEL: str = "groq/qwen/qwen3.8-27b"
+    FAST_ROUTING_MODEL: str = "groq/qwen/qwen3.8-27b"
+    SYNTHESIS_MODEL: str = "groq/qwen/qwen3.8-27b"
+
+    # Supported Model Registry (LiteLLM Compatible)
+    AVAILABLE_MODELS: list[str] = [
+        "groq/qwen/qwen3.8-27b",
+        "groq/openai/gpt-oss-120b",
+        "openrouter/nvidia/nemotron-3.5-lightning:free",
+        "openrouter/deepseek/deepseek-chat",
+        "openrouter/anthropic/claude-3.5-sonnet",
+        "gemini/gemini-2.5-flash",
+        "gemini/gemini-1.5-pro",
+        "claude-3-7-sonnet-20250219",
+        "claude-3-5-haiku-20241022",
+        "gpt-4o",
+        "gpt-4o-mini",
+    ]
 
     # Internal pipeline constants
     QDRANT_COLLECTION: str = "cortex_documents"
