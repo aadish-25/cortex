@@ -111,7 +111,13 @@ async def execute_web_search(
                     parent = link.find_parent("div", class_="result")
                     title_elem = parent.find("a", class_="result__url") if parent else None
                     title = title_elem.get_text(strip=True) if title_elem else "Web Result"
-                    url = title_elem["href"] if title_elem and title_elem.has_attr("href") else "https://duckduckgo.com"
+                    raw_url = title_elem.get("href") if title_elem else None
+                    if isinstance(raw_url, list):
+                        url = raw_url[0] if raw_url else "https://duckduckgo.com"
+                    elif isinstance(raw_url, str):
+                        url = raw_url
+                    else:
+                        url = "https://duckduckgo.com"
 
                     sanitized_snippet, had_injection = sanitize_inbound_web_snippet(snippet)
                     xml_block = wrap_in_untrusted_xml(title, url, sanitized_snippet)
