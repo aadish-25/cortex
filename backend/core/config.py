@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     )
 
     # Environment-specific variables (Loaded strictly from .env)
+    ENVIRONMENT: str = "development"
     DATABASE_URL: str
     REDIS_URL: str
     QDRANT_URL: str

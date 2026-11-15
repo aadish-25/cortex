@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from backend.core.config import settings
 from backend.db.database import init_db
 
 
@@ -12,10 +13,17 @@ async def lifespan(app: FastAPI):
     yield
 
 
+docs_url = "/docs" if settings.ENVIRONMENT == "development" else None
+redoc_url = "/redoc" if settings.ENVIRONMENT == "development" else None
+openapi_url = "/openapi.json" if settings.ENVIRONMENT == "development" else None
+
 app = FastAPI(
     title="Cortex API",
     description="Enterprise RAG Assistant Backend (AAD-H1)",
     version="0.1.0",
+    docs_url=docs_url,
+    redoc_url=redoc_url,
+    openapi_url=openapi_url,
     lifespan=lifespan,
 )
 
