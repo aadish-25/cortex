@@ -81,7 +81,7 @@ async def test_turn_2_heuristic_fusion_rewrite():
     query = "Can I claim that for dinner?"
     rewritten, was_rewritten = await rewrite_query(query, history=history)
     assert was_rewritten is True
-    assert "Bangalore offsite" in rewritten
+    assert "Bangalore" in rewritten and ("meal" in rewritten.lower() or "offsite" in rewritten.lower())
 
 
 def test_compound_query_decomposition_dag():
@@ -110,3 +110,29 @@ async def test_plan_and_decompose_e2e():
     assert plan.original_query == "Summarize engineering workstation policy"
     assert len(plan.tasks) == 1
     assert plan.tasks[0].type == PlanTaskType.INTERNAL_RAG
+
+
+def test_classify_task_intent_chit_chat():
+    """Verifies non-enterprise conversational queries classify as DIRECT_CHAT."""
+    from backend.services.orchestration.query_planner import classify_task_intent
+
+    assert classify_task_intent("What's up? What you doing?") == PlanTaskType.DIRECT_CHAT
+    assert classify_task_intent("hello, how are you?") == PlanTaskType.DIRECT_CHAT
+    assert classify_task_intent("who are you?") == PlanTaskType.DIRECT_CHAT
+
+
+def test_format_conversation_history_with_compaction():
+    """Verifies conversation history incorporates rolling executive summaries."""
+    from backend.services.orchestration.query_planner import format_conversation_history
+
+    history = [
+        ChatMessage(role=ChatRole.USER, content="Can contractors use MacBook Pro?"),
+        ChatMessage(role=ChatRole.ASSISTANT, content="Contractors are issued standard ThinkPads."),
+    ]
+    formatted = format_conversation_history(
+        history=history,
+        summary="User is an Engineering manager discussing hardware provisioning."
+    )
+    assert "[Prior Conversation Summary]: User is an Engineering manager discussing hardware provisioning." in formatted
+    assert "User: Can contractors use MacBook Pro?" in formatted
+    assert "Assistant: Contractors are issued standard ThinkPads." in formatted

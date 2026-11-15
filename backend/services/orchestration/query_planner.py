@@ -1,14 +1,16 @@
-import json
 import logging
 import re
 from typing import List, Optional
 
+from pydantic import BaseModel, Field
+
 from backend.core.config import settings
 from backend.models.chat import ChatMessage, ChatRole, ExecutionPlan, PlanTask, PlanTaskType
+from backend.services.orchestration.llm_service import llm_service
 
 logger = logging.getLogger(__name__)
 
-# Heuristic patterns identifying pronouns and relational anaphora in conversational follow-ups
+# Heuristic patterns identifying pronouns and relational anaphora in conversational follow-ups (Fallback only)
 ANAPHORA_PATTERN = re.compile(
     r"\b(it|its|they|them|their|those|these|this|that|he|she|his|her)\b|"
     r"\b(what about|how about|can i claim that|the policy|the rule|the same|same for|as mentioned|above|previous)\b|"
@@ -16,90 +18,176 @@ ANAPHORA_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Multi-command delimiter pattern for offline fallback (handles ;, ,, |, +, /, "and then", "after that")
+SPLIT_CONJUNCTIONS_PATTERN = re.compile(
+    r"\s*(?:;\s*|,\s*|\band then\b|\band also\b|\bafter that\b|\bas well as\b|\|\s*|\+\s*|\/\s*)\s*",
+    re.IGNORECASE,
+)
 
-def detect_anaphora_or_pronoun(query: str) -> bool:
+# Conversational chit-chat and greetings patterns (Fallback only)
+CHIT_CHAT_TRIGGERS = [
+    "what's up", "whats up", "what you doing", "what are you doing",
+    "how are you", "who are you", "what can you do", "hi", "hello",
+    "hey", "good morning", "good evening", "good afternoon",
+    "how's it going", "how is it going", "thanks", "thank you",
+    "bye", "goodbye", "cool", "ok", "okay", "kya chal raha hai"
+]
+
+
+# ==========================================
+# Pydantic Schemas for Structured LLM Outputs
+# ==========================================
+
+class LLMQueryRewrite(BaseModel):
+    has_anaphora_or_missing_context: bool = Field(
+        description="True if the user's follow-up question references past conversation, pronouns ('it', 'that', 'those'), or missing referents in any language."
+    )
+    rewritten_query: str = Field(
+        description="The self-contained standalone question resolving all pronouns and missing context. If no rewrite needed or if it is chit-chat, keep original query."
+    )
+    is_chit_chat: bool = Field(
+        default=False,
+        description="True if the message is general chit-chat, greeting, or small talk in English or Hinglish (e.g. 'What's up?', 'Hello', 'Kya chal raha hai')."
+    )
+
+
+class LLMPlanTask(BaseModel):
+    id: int = Field(description="Sequential task integer ID, e.g. 1, 2, 3")
+    type: PlanTaskType = Field(
+        description="Task intent type: INTERNAL_RAG for company knowledge, EXTERNAL_WEB for internet search, STRUCTURED_LOOKUP for SQL DB queries, ACTION_WORKFLOW for drafting/submitting Jira tickets, DIRECT_CHAT for greetings/chit-chat"
+    )
+    query: str = Field(description="Focused query, action instruction, or message for this specific task")
+    depends_on: List[int] = Field(default_factory=list, description="IDs of prerequisite tasks that must complete first")
+
+
+class LLMExecutionPlan(BaseModel):
+    tasks: List[LLMPlanTask] = Field(description="List of plan tasks to execute")
+
+
+# ==========================================
+# Helpers & Context Management
+# ==========================================
+
+def detect_anaphora_or_pronoun(query: Optional[str] = None) -> bool:
     """
-    Heuristic check for relational references and pronouns.
-    Returns True if the query appears to be an ambiguous conversational follow-up.
+    Heuristic check for relational references and pronouns (Fallback path).
+    Guarded defensively against None or non-string inputs.
     """
+    if not query or not isinstance(query, str):
+        return False
     return bool(ANAPHORA_PATTERN.search(query.strip()))
 
 
-def extract_recent_history_window(history: List[ChatMessage], max_messages: int = 4) -> List[ChatMessage]:
+def extract_recent_history_window(
+    history: Optional[List[ChatMessage]] = None,
+    max_messages: int = 4,
+) -> List[ChatMessage]:
     """
-    Extracts static sliding window of the last 2 conversation turns (max 4 messages).
+    Extracts sliding window of conversation turns.
     Excludes system messages to avoid context bloat.
     """
+    if not history:
+        return []
     non_system = [m for m in history if m.role in (ChatRole.USER, ChatRole.ASSISTANT)]
     return non_system[-max_messages:]
 
 
+def format_conversation_history(
+    history: Optional[List[ChatMessage]] = None,
+    max_turns: int = 10,
+    summary: Optional[str] = None,
+) -> str:
+    """
+    Formats the conversation history for the LLM with support for Rolling Compaction (Decision D28).
+    - If a prior summary exists, it is prepended: '[Prior Conversation Summary: ...]'
+    - Preserves up to max_turns recent messages to maintain long-range context without blinding the model.
+    """
+    parts: List[str] = []
+    if summary:
+        parts.append(f"[Prior Conversation Summary]: {summary}")
+
+    if not history:
+        return "\n".join(parts)
+
+    non_system = [m for m in history if m.role in (ChatRole.USER, ChatRole.ASSISTANT)]
+    recent = non_system[-(max_turns * 2):] if max_turns else non_system
+
+    for m in recent:
+        parts.append(f"{m.role.value.capitalize()}: {m.content}")
+
+    return "\n".join(parts)
+
+
+# ==========================================
+# Query Rewriting & Planner Logic
+# ==========================================
+
 async def rewrite_query(
     query: str,
-    history: List[ChatMessage],
+    history: Optional[List[ChatMessage]] = None,
+    summary: Optional[str] = None,
 ) -> tuple[str, bool]:
     """
-    Conversational Query Rewriting Node (PRD 6.2):
+    Conversational Query Rewriting Node (PRD 6.2 & Decision D28):
     1. Turn 1 (history empty): 0ms Zero-Latency Bypass.
-    2. Turn 2+ (no pronouns/anaphora): 0ms Zero-Latency Bypass.
-    3. Turn 2+ (anaphora detected): Resolves context using last 2 turns (max 4 messages).
+    2. Turn 2+ (LiteLLM Gateway configured): Full semantic anaphora and referent resolution in any language (English/Hinglish).
+    3. Turn 2+ (Offline fallback): Heuristic pronoun and recency check.
     Returns (resolved_query, was_rewritten).
     """
     # 1. Turn 1 Zero-Latency Bypass (0ms overhead)
     if not history:
         return query, False
 
-    # 2. Check for anaphora / pronouns
+    conversation_context = format_conversation_history(history, max_turns=10, summary=summary)
+    if not conversation_context:
+        return query, False
+
+    # 2. Primary Path: LiteLLM Gateway
+    if llm_service.is_configured():
+        prompt = (
+            "You are an expert conversational query rewriter.\n"
+            "Given the conversation history and the user's latest follow-up question:\n"
+            "1. Determine whether the query references past conversation, pronouns ('it', 'that', 'those'), or missing context in English or Hinglish.\n"
+            "2. Rewrite the user's question into a self-contained, standalone question resolving all pronouns and missing entities.\n"
+            "3. If it is general chit-chat, identify it as chit-chat and do not alter the query.\n\n"
+            f"Conversation History:\n{conversation_context}\n\n"
+            f"User Follow-up Question: {query}\n"
+        )
+        try:
+            parsed = await llm_service.generate_structured(
+                prompt=prompt,
+                response_model=LLMQueryRewrite,
+                model=settings.FAST_ROUTING_MODEL,
+            )
+            if parsed and parsed.has_anaphora_or_missing_context and parsed.rewritten_query:
+                return parsed.rewritten_query.strip(), True
+            return query, False
+        except Exception as exc:
+            logger.warning("LLM query rewriting failed, falling back to heuristic fusion: %s", exc)
+
+    # 3. Deterministic heuristic fallback (when offline or no API key configured)
     if not detect_anaphora_or_pronoun(query):
         return query, False
 
     recent_turns = extract_recent_history_window(history, max_messages=4)
-    if not recent_turns:
-        return query, False
-
-    # 3. LLM-driven query rewriting if Gemini API key is configured
-    if settings.GEMINI_API_KEY:
-        try:
-            from google import genai
-            client = genai.Client(api_key=settings.GEMINI_API_KEY)
-            
-            conversation_context = "\n".join(
-                f"{m.role.value.capitalize()}: {m.content}" for m in recent_turns
-            )
-            prompt = (
-                "You are an expert conversational query rewriter. Given the conversation history, "
-                "rewrite the user's follow-up question into a single self-contained, standalone question "
-                "that can be searched in an enterprise vector database without ambiguity.\n"
-                "Strip pronouns like 'it', 'that', 'those' and replace them with their specific referents.\n"
-                "Return ONLY the rewritten query text and nothing else.\n\n"
-                f"Conversation History:\n{conversation_context}\n\n"
-                f"User Follow-up Question: {query}\n"
-                "Rewritten Query:"
-            )
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-            )
-            rewritten = (response.text or "").strip()
-            if rewritten:
-                return rewritten, True
-        except Exception as exc:
-            logger.warning("Gemini query rewriting failed, falling back to heuristic fusion: %s", exc)
-
-    # 4. Deterministic heuristic fallback when offline or no API key
-    # Finds the last user query to supply the missing subject
     last_user_msg = next((m for m in reversed(recent_turns) if m.role == ChatRole.USER), None)
     if last_user_msg:
-        # Combine the context of the previous question with the follow-up
         heuristic_query = f"{query} (in context of: {last_user_msg.content})"
         return heuristic_query, True
 
     return query, False
 
 
-def classify_task_intent(query_text: str) -> PlanTaskType:
-    """Classifies task intent using deterministic enterprise heuristics."""
-    q_lower = query_text.lower()
+def classify_task_intent(query_text: Optional[str] = None) -> PlanTaskType:
+    """Classifies task intent using enterprise heuristics (Offline Fallback)."""
+    if not query_text or not isinstance(query_text, str):
+        return PlanTaskType.INTERNAL_RAG
+
+    q_lower = query_text.lower().strip()
+
+    # Direct chit-chat / greetings check
+    if any(q_lower.startswith(trigger) or trigger in q_lower for trigger in CHIT_CHAT_TRIGGERS) and len(query_text.split()) < 8:
+        return PlanTaskType.DIRECT_CHAT
 
     if any(k in q_lower for k in ["leave balance", "my tickets", "ticket status", "department head", "manager for"]):
         return PlanTaskType.STRUCTURED_LOOKUP
@@ -107,25 +195,27 @@ def classify_task_intent(query_text: str) -> PlanTaskType:
         return PlanTaskType.ACTION_WORKFLOW
     elif any(k in q_lower for k in ["external", "market price", "latest 2026", "web search", "google", "flight benchmark", "news"]):
         return PlanTaskType.EXTERNAL_WEB
-    elif any(k in q_lower for k in ["hi", "hello", "hey", "who are you", "what can you do", "thanks", "thank you"]) and len(query_text.split()) < 5:
-        return PlanTaskType.DIRECT_CHAT
 
     return PlanTaskType.INTERNAL_RAG
 
 
-def decompose_compound_query_heuristic(query: str) -> List[PlanTask]:
+def decompose_compound_query_heuristic(query: Optional[str] = None) -> List[PlanTask]:
     """
-    Deterministic rule-based decomposition for compound prompts (Decision D24 fallback).
-    Detects conjunctions ('and also', 'then', 'as well as', 'after that') and assigns dependencies.
+    Rule-based decomposition for compound prompts (Decision D24 Offline Fallback).
+    Detects conjunctions, commas, semicolons, vertical bars, plus signs, slashes.
     """
-    # Split on explicit multi-command conjunctions
-    split_pattern = re.compile(r"\s*(?:;\s*|\band then\b|\band also\b|\bafter that\b|\bas well as\b)\s*", re.IGNORECASE)
-    parts = [p.strip() for p in split_pattern.split(query) if p.strip()]
+    if not query or not isinstance(query, str):
+        return []
 
-    # If simple single-clause prompt, return single task
+    cleaned_query = query.strip()
+    if not cleaned_query:
+        return []
+
+    parts = [p.strip() for p in SPLIT_CONJUNCTIONS_PATTERN.split(cleaned_query) if p.strip()]
+
     if len(parts) <= 1:
-        task_type = classify_task_intent(query)
-        return [PlanTask(id=1, type=task_type, query=query, depends_on=[])]
+        task_type = classify_task_intent(cleaned_query)
+        return [PlanTask(id=1, type=task_type, query=cleaned_query, depends_on=[])]
 
     tasks: List[PlanTask] = []
     lookup_and_rag_ids = []
@@ -133,7 +223,6 @@ def decompose_compound_query_heuristic(query: str) -> List[PlanTask]:
     for idx, part in enumerate(parts, start=1):
         task_type = classify_task_intent(part)
 
-        # Action workflows (e.g. draft ticket) depend on earlier retrieval/lookups
         if task_type == PlanTaskType.ACTION_WORKFLOW and lookup_and_rag_ids:
             tasks.append(
                 PlanTask(
@@ -160,59 +249,54 @@ def decompose_compound_query_heuristic(query: str) -> List[PlanTask]:
 async def plan_and_decompose_query(
     query: str,
     history: Optional[List[ChatMessage]] = None,
+    summary: Optional[str] = None,
 ) -> ExecutionPlan:
     """
     Master Query Planner (Phase 3.1 & Decision D24):
-    1. Rewrites conversational query if Turn 2+ with anaphora.
-    2. Decomposes compound prompt into a DAG of sub-tasks with strict depends_on IDs.
+    1. Rewrites conversational query if Turn 2+ with anaphora in English or Hinglish.
+    2. Decomposes prompt into an optimal DAG of sub-tasks with strict depends_on IDs using LiteLLM.
+       Natively handles commas, semicolons, pipes (|), plus signs (+), slashes (/), and multi-lingual chaining.
     """
     history = history or []
 
     # Step 1: Turn-based query rewrite
-    active_query, was_rewritten = await rewrite_query(query, history)
+    active_query, was_rewritten = await rewrite_query(query, history, summary=summary)
 
-    # Step 2: Multi-Query Decomposition
-    if settings.GEMINI_API_KEY:
+    # Step 2: Multi-Query Decomposition with LiteLLM Abstraction Layer
+    if llm_service.is_configured():
+        prompt = (
+            "You are an enterprise query planner and multi-intent DAG decomposition engine.\n"
+            "Analyze the user's prompt (which may be in English, Hinglish, informal language, or mixed phrasing).\n"
+            "Users may chain multiple intents using commas, semicolons, vertical bars ('|'), plus signs ('+'), slashes ('/'), conjunctions, or natural transitions.\n\n"
+            "Intent types:\n"
+            "- INTERNAL_RAG: Company policies, employee handbook, benefits, tech stack, travel & offsite rules, security clearance.\n"
+            "- EXTERNAL_WEB: Public internet search for outside market data, flights, general news, tax benchmarks.\n"
+            "- STRUCTURED_LOOKUP: Internal SQL lookups for user leave balances, ticket status, department managers.\n"
+            "- ACTION_WORKFLOW: Drafting or submitting Jira service tickets, equipment orders, leave requests.\n"
+            "- DIRECT_CHAT: Greetings, conversational pleasantries ('What's up', 'kya chal raha hai', 'who are you'), or general banter.\n\n"
+            "Rules:\n"
+            "- Decompose compound prompts into discrete, standalone sub-tasks.\n"
+            "- Independent tasks must have depends_on: [].\n"
+            "- If the query is conversational chit-chat, assign DIRECT_CHAT with depends_on: [].\n"
+            "- Action tasks that require context from RAG or SQL lookups must declare their prerequisite task IDs in depends_on.\n\n"
+            f"User Prompt: {active_query}\n"
+        )
         try:
-            from google import genai
-            client = genai.Client(api_key=settings.GEMINI_API_KEY)
-            
-            prompt = (
-                "You are an enterprise query planner DAG engine. Decompose the user's prompt into an array "
-                "of discrete sub-tasks. Each sub-task must have an integer id (1, 2, ...), a type, "
-                "a standalone query, and an array of depends_on ids.\n\n"
-                "Allowed task types:\n"
-                "- INTERNAL_RAG: querying company policies, technical offsites, per diems, security.\n"
-                "- EXTERNAL_WEB: searching public internet for external benchmarks, tax laws, vendor info.\n"
-                "- STRUCTURED_LOOKUP: querying user-specific DB rows (leave balances, ticket status).\n"
-                "- ACTION_WORKFLOW: creating or drafting Jira tickets, requesting equipment or leave.\n"
-                "- DIRECT_CHAT: general greetings, polite exchanges.\n\n"
-                "Rules:\n"
-                "- Independent tasks must have depends_on: [].\n"
-                "- Drafting or action tasks that need info from lookup or RAG must declare those task ids in depends_on.\n"
-                "- Return STRICTLY valid JSON with no markdown formatting.\n\n"
-                f"User Prompt: {active_query}\n"
-                "JSON:"
+            parsed = await llm_service.generate_structured(
+                prompt=prompt,
+                response_model=LLMExecutionPlan,
+                model=settings.FAST_ROUTING_MODEL,
             )
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-            )
-            cleaned_text = (response.text or "").strip()
-            if cleaned_text.startswith("```"):
-                cleaned_text = re.sub(r"^```(?:json)?\n|\n```$", "", cleaned_text)
-            
-            task_dicts = json.loads(cleaned_text)
-            parsed_tasks = [
-                PlanTask(
-                    id=t["id"],
-                    type=PlanTaskType(t["type"]),
-                    query=t["query"],
-                    depends_on=t.get("depends_on", []),
-                )
-                for t in task_dicts
-            ]
-            if parsed_tasks:
+            if parsed and parsed.tasks:
+                parsed_tasks = [
+                    PlanTask(
+                        id=t.id,
+                        type=t.type,
+                        query=t.query,
+                        depends_on=t.depends_on,
+                    )
+                    for t in parsed.tasks
+                ]
                 return ExecutionPlan(
                     tasks=parsed_tasks,
                     original_query=query,
@@ -222,7 +306,7 @@ async def plan_and_decompose_query(
         except Exception as exc:
             logger.warning("LLM DAG decomposition failed, falling back to heuristic: %s", exc)
 
-    # Fallback heuristic decomposition
+    # Fallback heuristic decomposition (when offline / no API keys configured)
     tasks = decompose_compound_query_heuristic(active_query)
     return ExecutionPlan(
         tasks=tasks,
