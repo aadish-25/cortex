@@ -12,6 +12,7 @@ from backend.services.orchestration import (
     action_engine,
     action_guard,
     dag_orchestrator,
+    memory_service,
     query_planner,
     web_search_service,
 )
@@ -36,5 +37,6 @@ __all__ = [
     "web_search_service",
     "action_guard",
     "action_engine",
+    "memory_service",
     "jira_service",
 ]
