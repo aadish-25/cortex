@@ -349,3 +349,13 @@ Silent fallbacks that hide missing infrastructure create severe production defec
 - `run.py` validates container readiness before launching backend workers, guaranteeing that all services run against persistent infrastructure.
 
 ---
+
+## D34 — Runtime Redis Health Degradation & Dynamic Admin Observability
+
+Infrastructure dependencies may crash or be terminated during server runtime (e.g., Redis container stopped after successful server boot):
+- **Dynamic Connection Probing**: Health check (`/api/v1/health`) and client singletons (`RateLimiter`, `StreamManager`) dynamically verify Redis connectivity with a 1.0-second socket timeout rather than assuming initial boot status persists.
+- **Node-Local In-Memory Rate Limiting Fallback**: If Redis drops offline at runtime, the `RateLimiter` seamlessly transitions to local in-memory token buckets (`asyncio.Lock` per provider). Existing requests continue processing without throwing 500 Internal Server Errors or dropping traffic.
+- **Admin Observability & Degradation Badge**: The Admin Dashboard real-time health indicator transitions from `HEALTHY` (green) to `DEGRADED (Redis Offline)` (amber), alerting administrators that multi-node synchronization and stream rehydration are temporarily paused while core inference remains available.
+
+---
+

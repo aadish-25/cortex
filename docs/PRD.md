@@ -767,6 +767,14 @@ RATE_LIMIT_CONFIGS = {
 - **Graceful SSE Degradation**: If an external provider's quota is exhausted, Cortex does **not** crash the SSE stream or throw a 500 error. It emits a polite, informative inline event:
   > *"Live code search is temporarily at rate limit. Continuing with internal policy documentation."*
 
+### 9.4 Runtime Infrastructure Health Monitoring & Redis Degradation Handling (Decision D34)
+In production and development, infrastructure dependencies may fail mid-execution (e.g. Redis container stops while FastAPI remains running). Cortex handles this through dynamic health monitoring and graceful degradation:
+- **Dynamic Connection Probing**: The `/api/v1/health` endpoint and internal client singletons (`RateLimiter`, `StreamManager`) dynamically probe Redis connectivity with a 1.0-second socket timeout rather than assuming startup health persists indefinitely.
+- **Graceful Degradation Matrix**:
+  - **Redis Online (`HEALTHY`)**: Distributed token-bucket rate limiting synchronized via Redis hashes/keys; full 10-minute SSE stream rehydration buffer enabled.
+  - **Redis Offline (`DEGRADED`)**: The system transitions immediately to node-local in-memory token bucket tracking (`asyncio.Lock` per provider). Existing requests continue processing without throwing 500 Internal Server Errors. SSE streams deliver tokens in real time, with rehydration temporarily bypassed until Redis recovers.
+- **Admin Visibility**: When Redis drops offline, the Admin Dashboard immediately transitions the system health badge from `HEALTHY` (green) to `DEGRADED` (amber) with an actionable alert: *"Redis Offline — Operating on in-memory fallback. Multi-node rate-limit synchronization paused."*
+
 ---
 
 ## 10. Frontend UI/UX & Interaction Specifications
@@ -843,6 +851,7 @@ When an authenticated Administrator (`Role.ADMIN`) uses the chat interface, spec
    ```
 3. **Document Status Actions**: For documents in `UPDATE_FAILED` or `UPDATING` status, admins see inline action buttons:
    `[Retry Ingestion]`, `[Force Revert to v1]`, `[Inspect Error Logs]`.
+4. **Real-Time Infrastructure Health Bar**: The Admin header features a live status pill monitoring PostgreSQL, Qdrant, Redis, and LLM Providers. If Redis drops offline at runtime, the indicator dynamically flips to `DEGRADED (Redis Offline)` with an inline tooltip explaining fallback mode.
 
 ### 10.7 Streaming SSE Protocol & Redis Stream Rehydration (Decision D17)
 - **Endpoint**: `GET /api/v1/chat/stream?conversation_id={id}&message={text}`
@@ -925,6 +934,7 @@ The resulting calibrated threshold is locked into `config.py` as `RERANKER_CONFI
 | **D31** | Token & Commercial Cost Tracking | Automated token tracking, model pricing catalog with `EXACT_PUBLISHED` vs `ASSUMED_BENCHMARK` badges, and admin analytics. |
 | **D32** | Unified Dev Orchestrator & PostgreSQL | Single-command startup (`run.py`), automated Docker container launch, and PostgreSQL 16 with `asyncpg` `NullPool`. |
 | **D33** | Fail-Fast Infrastructure Connectivity | Eliminated silent in-memory vector store fallbacks; immediate actionable `ConnectionError` on container outage. |
+| **D34** | Runtime Redis Degradation & Dynamic Health Observability | Real-time probing of Redis; automatic fallback to local token-bucket rate limiter during runtime outage; Admin Dashboard displays DEGRADED status without crashing API endpoints. |
 
 ---
-*End of Product Requirement Document (PRD v2.4.0) — Project Cortex (AAD-H1)*
+*End of Product Requirement Document (PRD v2.5.0) — Project Cortex (AAD-H1)*
