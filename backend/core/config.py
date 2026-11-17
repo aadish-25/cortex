@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     # Provider Default Models
     GROQ_DEFAULT_MODEL: str = "groq/qwen/qwen3.8-27b"
     OPENROUTER_DEFAULT_MODEL: str = "openrouter/nvidia/nemotron-3.5-lightning:free"
-    GEMINI_DEFAULT_MODEL: str = "gemini/gemini-2.5-flash"
+    GEMINI_DEFAULT_MODEL: str = "gemini/gemini-2.0-flash"
 
     # LLM Gateway & Active Provider Configuration
     DEFAULT_LLM_PROVIDER: str = "groq"

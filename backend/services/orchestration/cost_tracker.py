@@ -94,6 +94,19 @@ def calculate_model_cost(
     return round(prompt_cost + comp_cost, 6), badge, note
 
 
+class TransparencyBadge:
+    def __init__(self, value: str) -> None:
+        self.value = value
+
+
+class CostCalculation:
+    def __init__(self, cost: float, cost_badge: str, pricing_note: str) -> None:
+        self.cost = cost
+        self.cost_badge = cost_badge
+        self.pricing_note = pricing_note
+        self.transparency_badge = TransparencyBadge(cost_badge)
+
+
 class CostTracker:
     """
     Sub-millisecond in-memory accumulator and persistent tracking service for LLM
@@ -109,6 +122,18 @@ class CostTracker:
             "gemini": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "estimated_cost_usd": 0.0, "is_free_tier": True, "models": {}},
         }
         self._user_stats: Dict[str, Dict[str, Any]] = {}
+
+    def calculate_cost(
+        self,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        is_free_tier: bool = True,
+    ) -> CostCalculation:
+        """Helper to compute cost and return structured CostCalculation."""
+        provider = model.split("/")[0] if "/" in model else "default"
+        cost_usd, badge, note = calculate_model_cost(model, provider, prompt_tokens, completion_tokens)
+        return CostCalculation(cost=cost_usd, cost_badge=badge, pricing_note=note)
 
     def reset(self) -> None:
         """Resets in-memory metrics (primarily for test suite isolation)."""
