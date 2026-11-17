@@ -18,6 +18,7 @@ class Conversation(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     user_id: uuid.UUID = Field(foreign_key="users.id", index=True)
     title: str = Field(default="New Conversation")
+    summary: Optional[str] = Field(default=None, nullable=True, description="Cached executive context summary of older compacted turns")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

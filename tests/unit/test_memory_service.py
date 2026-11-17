@@ -141,3 +141,52 @@ async def test_auto_title_conversation(sample_user):
         )
         assert conv.title != "New Conversation"
         assert len(conv.title) > 0
+
+
+@pytest.mark.asyncio
+async def test_lazy_cached_summary_compaction(sample_user, monkeypatch):
+    """
+    Verifies that when a cached summary exists on Conversation,
+    it is prepended to recent turns without invoking the LLM summarizer on every turn.
+    Also verifies DB messages are 100% preserved.
+    """
+    summarize_called = False
+
+    async def mock_generate_text(*args, **kwargs):
+        nonlocal summarize_called
+        summarize_called = True
+        return "Executive brief: Kubernetes staging configuration."
+
+    monkeypatch.setattr(
+        "backend.services.orchestration.memory_service.llm_service.generate_text",
+        mock_generate_text,
+    )
+
+    async with async_session() as session:
+        conv = await memory_service.get_or_create_conversation(session, sample_user.id)
+        # Pre-set cached summary
+        conv.summary = "Cached executive brief: User discussed Kubernetes staging clusters."
+        session.add(conv)
+        await session.commit()
+
+        # Add 6 messages to conversation
+        for i in range(6):
+            sender = "user" if i % 2 == 0 else "assistant"
+            await memory_service.append_message(session, conv.id, sender, f"Turn {i} content")
+
+        # Call prepare_context_window
+        window, is_near = await memory_service.prepare_context_window(session, conv.id, sample_user)
+
+        # Should NOT have called LLM summarizer because cached summary was reused!
+        assert summarize_called is False
+
+        # Window should have the executive summary + the recent turns
+        assert len(window) == 5  # 1 summary message + 4 recent turns
+        assert "[Executive Context Summary of Past Turns]" in window[0].content
+        assert "Cached executive brief" in window[0].content
+        assert window[-1].content == "Turn 5 content"
+
+        # Assert DB retains all 6 messages verbatim
+        db_history = await memory_service.get_conversation_history(session, conv.id)
+        assert len(db_history) == 6
+

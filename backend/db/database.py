@@ -44,6 +44,9 @@ async def init_db() -> None:
         # Import models so SQLModel metadata registers all tables
         import backend.models  # noqa: F401
         await conn.run_sync(SQLModel.metadata.create_all)
+        if "postgresql" in settings.DATABASE_URL:
+            import sqlalchemy as sa
+            await conn.execute(sa.text("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS summary TEXT;"))
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:

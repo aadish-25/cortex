@@ -178,20 +178,43 @@ class MemoryService:
         user: User,
     ) -> Tuple[List[ChatMessage], bool]:
         """
-        Constructs context window with 4,000-token rolling buffer compaction (Decision D28).
-        If conversation exceeds 4,000 tokens:
-          - Generates an executive summary of older messages via Fast LLM.
-          - Retains recent turns verbatim.
-          - Returns (compacted_history, is_near_ceiling).
+        Constructs context window with 8,000-token rolling buffer compaction (Decisions D28 & D37).
+        Uses lazy compaction:
+          1. If total tokens <= 8,000, returns raw history directly (Zero LLM calls).
+          2. If a cached summary already exists on the Conversation row, it is prepended
+             to recent turns without re-summarizing on every turn.
+          3. Only when total uncompressed context crosses 8,000 tokens is a one-off
+             summarization executed and saved to `Conversation.summary`.
+          4. PostgreSQL `messages` table remains 100% append-only and immutable.
         """
-        history = await self.get_conversation_history(session, conversation_id, limit=30)
+        # Fetch conversation record to check for cached summary
+        conv_stmt = select(Conversation).where(Conversation.id == conversation_id)
+        conv_res = await session.execute(conv_stmt)
+        conversation = conv_res.scalar_one_or_none()
+        cached_summary = conversation.summary if conversation else None
+
+        history = await self.get_conversation_history(session, conversation_id, limit=50)
         if not history:
             return [], False
+
+        # If a cached summary already exists, context window is summary + last RAW_PRESERVED_TURNS
+        if cached_summary:
+            compacted_system_msg = ChatMessage(
+                role=ChatRole.SYSTEM,
+                content=f"[Executive Context Summary of Past Turns]:\n{cached_summary.strip()}",
+            )
+            recent_turns = history[-RAW_PRESERVED_TURNS:]
+            combined_tokens = estimate_token_count(cached_summary) + sum(estimate_token_count(m.content) for m in recent_turns)
+            is_near = combined_tokens >= (MAX_CONVERSATION_TOKENS * 0.85)
+
+            # If combined context is comfortably within 8,000 tokens, return immediately without re-summarizing
+            if combined_tokens <= MAX_CONVERSATION_TOKENS:
+                return [compacted_system_msg] + recent_turns, is_near
 
         total_tokens = sum(estimate_token_count(msg.content) for msg in history)
         is_near_ceiling = total_tokens >= (MAX_CONVERSATION_TOKENS * 0.85)
 
-        # If within comfortable token limits or history is short, return intact
+        # If within comfortable token limits or history is short, return intact (Zero LLM calls)
         if total_tokens <= MAX_CONVERSATION_TOKENS or len(history) <= RAW_PRESERVED_TURNS:
             return history, is_near_ceiling
 
@@ -223,6 +246,13 @@ class MemoryService:
                 len(older_turns),
                 estimate_token_count(summary),
             )
+
+            # Cache the summary on Conversation model for future turns
+            if conversation:
+                conversation.summary = summary.strip()
+                session.add(conversation)
+                await session.commit()
+
             return [compacted_message] + recent_turns, is_near_ceiling
         except Exception as e:
             logger.warning("Rolling summarization failed (%s); falling back to recent turns only", e)
