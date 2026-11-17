@@ -920,6 +920,11 @@ The resulting calibrated threshold is locked into `config.py` as `RERANKER_CONFI
 | **D26** | Hierarchical Tooling Architecture | Core tools (`internal_knowledge_search`, `external_web_search`, bounded `sql_lookup` sub-functions, `action_workflow`) + prospective admin catalog. |
 | **D27** | Extensible Multi-Provider Rate Limiter | Token bucket rate limiter with modular `RATE_LIMIT_CONFIGS`, HTTP header priority (`Retry-After`), jittered backoff, and graceful SSE degradation. |
 | **D28** | LangChain Short-Term Memory | `ConversationSummaryBufferMemory` with rolling summary buffer, `MAX_CONVERSATION_TOKENS` ceiling, and automatic branched chat. |
+| **D29** | KV Cache & Prompt Prefix Caching | Static immutable system prompts positioned first in context window to maximize vendor KV cache hit rates. |
+| **D30** | Interactive UI Model Selector | Bottom-left model picker dropdown with provider grouping, `:free` badges, context metrics, and dynamic execution override. |
+| **D31** | Token & Commercial Cost Tracking | Automated token tracking, model pricing catalog with `EXACT_PUBLISHED` vs `ASSUMED_BENCHMARK` badges, and admin analytics. |
+| **D32** | Unified Dev Orchestrator & PostgreSQL | Single-command startup (`run.py`), automated Docker container launch, and PostgreSQL 16 with `asyncpg` `NullPool`. |
+| **D33** | Fail-Fast Infrastructure Connectivity | Eliminated silent in-memory vector store fallbacks; immediate actionable `ConnectionError` on container outage. |
 
 ---
-*End of Product Requirement Document (PRD v2.3.0) — Project Cortex (AAD-H1)*
+*End of Product Requirement Document (PRD v2.4.0) — Project Cortex (AAD-H1)*

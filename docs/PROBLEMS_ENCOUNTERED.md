@@ -101,3 +101,33 @@ __tablename__: ClassVar[str] = "users"
 **Fix:** Wrap the field in SQLModel's official `col()` helper: `col(User.created_at).desc()`.
 
 ---
+
+## 10. Windows ProactorEventLoop vs. asyncpg Connection Pooling in Pytest
+
+**Symptom:** `RuntimeError: Event loop is closed` when running sequential async test functions with pytest-asyncio and PostgreSQL.
+
+**Cause:** Python 3.14 on Windows defaults to `ProactorEventLoop`. Default SQLAlchemy `AsyncAdaptedQueuePool` maintains open asyncpg connection handles bound to the event loop that created them. When pytest-asyncio closes each test function's event loop, connections remaining in the pool are orphaned and crash when accessed or closed by subsequent loops.
+
+**Fix:** In `backend/db/database.py`, configured `create_async_engine(..., poolclass=NullPool)` when connecting to PostgreSQL. `NullPool` opens connections on-demand and terminates them cleanly within the active loop, preventing cross-loop contamination.
+
+---
+
+## 11. Psycopg Async Incompatibility with ProactorEventLoop on Windows
+
+**Symptom:** `sqlalchemy.exc.InterfaceError: (psycopg.InterfaceError) Psycopg cannot use the 'ProactorEventLoop' to run in async mode.`
+
+**Cause:** Psycopg 3's async C extensions require `SelectorEventLoop` on Windows and cannot operate with Windows Proactor IOCP without custom loop factory plumbing.
+
+**Fix:** Standardized on `asyncpg>=0.30.0` with `postgresql+asyncpg://` which natively integrates with `ProactorEventLoop` on Windows.
+
+---
+
+## 12. Silent In-Memory Vector Store Masking Offline Docker Infrastructure
+
+**Symptom:** Local development runs silently fell back to an embedded in-memory Qdrant instance whenever Docker Desktop was offline, leading to unexpected index wipes and loss of uploaded documents across process restarts.
+
+**Cause:** `get_qdrant_client()` caught all connection exceptions and automatically instantiated `QdrantClient(":memory:")`.
+
+**Fix:** Removed the embedded fallback. `get_qdrant_client()` now raises an actionable `ConnectionError` with clear instructions to run `python run.py` or `docker compose up -d`. In addition, `run.py` validates Docker daemon readiness and container health before launching backend services.
+
+---
