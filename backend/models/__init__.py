@@ -14,6 +14,7 @@ from backend.models.action_draft import ActionDraft
 from backend.models.ticket import Ticket
 from backend.models.audit import AuditLog
 from backend.models.token_usage import TokenUsageLog
+from backend.models.leave import LeaveBalance
 
 __all__ = [
     "Role",
@@ -36,4 +37,5 @@ __all__ = [
     "Ticket",
     "AuditLog",
     "TokenUsageLog",
+    "LeaveBalance",
 ]

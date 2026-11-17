@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.models.chat import ChatMessage, ExecutionPlan, PlanTask, PlanTaskType
 from backend.models.user import User
 from backend.services.orchestration.query_planner import plan_and_decompose_query
+from backend.services.orchestration.sql_lookup_service import execute_sql_lookup
 from backend.services.orchestration.web_search_service import WebSearchResult, execute_web_search
 from backend.services.retrieval.crag_service import execute_crag_recovery
 from backend.services.retrieval.reranker_service import ConfidenceLevel, ScoredChunk
@@ -86,11 +87,19 @@ async def execute_task(
     elif task.type == PlanTaskType.DIRECT_CHAT:
         return "Hello! I am Cortex, your enterprise AI assistant. How can I help you today?", []
 
-    # 4. Structured Lookup (Placeholder for Phase 4)
+    # 4. Structured SQL Lookup (Phase 4.1 Bounded Parameterized Queries)
     elif task.type == PlanTaskType.STRUCTURED_LOOKUP:
+        lookup_result = await execute_sql_lookup(
+            session=session,
+            user=user,
+            query=task.query,
+        )
         return {
             "status": "LOOKUP_RESOLVED",
-            "message": f"Retrieved profile record for {user.name} ({user.department}).",
+            "message": lookup_result.message,
+            "data": lookup_result.data,
+            "intent": lookup_result.intent.value,
+            "records_count": lookup_result.records_count,
         }, []
 
     # 5. Action Workflow (Placeholder for Phase 4)
