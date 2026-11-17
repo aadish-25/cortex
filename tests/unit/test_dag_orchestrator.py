@@ -200,8 +200,24 @@ async def test_dag_orchestrator_end_to_end_execution():
 
 
 @pytest.mark.asyncio
-async def test_execute_task_github_search():
+async def test_execute_task_github_search(monkeypatch):
     """Verifies execute_task routes GITHUB_SEARCH to GitHubService and extracts citations."""
+    from backend.services.integrations.github_service import github_service
+
+    async def mock_search_code(*args, **kwargs):
+        return {
+            "status": "SUCCESS",
+            "items": [
+                {
+                    "name": "auth_service.py",
+                    "path": "backend/auth_service.py",
+                    "html_url": "https://github.com/aadish-25/cortex-testing/blob/main/backend/auth_service.py",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(github_service, "search_code", mock_search_code)
+
     client = get_qdrant_client()
     async with async_session() as session:
         user = User(
@@ -234,8 +250,24 @@ async def test_execute_task_github_search():
 
 
 @pytest.mark.asyncio
-async def test_execute_task_google_drive_search():
+async def test_execute_task_google_drive_search(monkeypatch):
     """Verifies execute_task routes DRIVE_SEARCH to GoogleDriveService and extracts citations."""
+    from backend.services.integrations.google_drive_service import google_drive_service
+
+    async def mock_search_files(*args, **kwargs):
+        return {
+            "status": "SUCCESS",
+            "files": [
+                {
+                    "id": "file_123",
+                    "name": "Medical Policy Runbook.gdoc",
+                    "webViewLink": "https://docs.google.com/document/d/file_123/edit",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(google_drive_service, "search_files", mock_search_files)
+
     client = get_qdrant_client()
     async with async_session() as session:
         user = User(
