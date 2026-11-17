@@ -643,9 +643,18 @@ graph TD
   - Searching and retrieving documents across enterprise Shared Drives, team drives, and shared project folders.
   - Cross-referencing unindexed ad-hoc spreadsheets or presentation slides.
 - **Authentication & Security Invariants**:
-  - User OAuth pass-through: Cortex passes the user's Google Workspace OAuth session token to the Google Drive API. Google's native authorization engine evaluates permissions at query time, guaranteeing zero cross-department data leakage.
+  - User OAuth pass-through / Target Folder Scoping: Cortex passes the user's Google Workspace OAuth session token or scoped Service Account / API Key restricted to `GOOGLE_DRIVE_ROOT_FOLDER_ID`. Google's native authorization engine evaluates permissions at query time, guaranteeing zero cross-department data leakage.
   - Folder-level restrictions: Administrative settings restrict search traversal to corporate designated Shared Drives.
   - High capacity free tier: 20,000 requests per 100 seconds per user project.
+
+#### 3. Zero-Write / Zero-Mutate Connector Security Invariant (Decision D39)
+- **Strictly Read-Only (HTTP GET Only)**:
+  - External MCP connectors for GitHub and Google Drive are architecturally constrained to read-only operations (`GET`).
+  - Outbound HTTP methods `POST`, `PUT`, `DELETE`, and `PATCH` are strictly prohibited. Cortex cannot create repos, delete issues, overwrite files, push commits, or alter Google Drive folder contents during standard conversational synthesis.
+- **Explicit Connector Invocation Policy**:
+  - Default enterprise knowledge retrieval **always** routes to internal 3D RBAC RAG (`cortex_documents`).
+  - External connectors (`GITHUB_SEARCH`, `DRIVE_SEARCH`) are **never speculatively fanned out**; they are activated if and only if the user explicitly references the external system (e.g. *"in Google Drive"*, *"search the repo on GitHub"*, *"check issue #3"*).
+  - This prevents context pollution, eliminates unnecessary API rate consumption, and guarantees low-latency query resolution.
 
 ### 7.3 Prospective Administrative Tools (Future Operational Catalog)
 Documented as an architectural design catalog for subsequent operational phases (not locked into Phase 1/2 implementation):
@@ -1004,6 +1013,7 @@ The resulting calibrated threshold is locked into `config.py` as `RERANKER_CONFI
 | **D36** | Two-Tier Long-Term Memory (LTM) Architecture | Hot Core Profile (<5ms system prompt prefix) + Cold Episodic Memory (~30-50ms Qdrant `cortex_user_memories`) with post-turn background learning, 0.85 deduplication threshold, and 5 structured categories (`preference`, `tech_stack`, `project_context`, `location`, `general`). |
 | **D37** | 8,000-Token Rolling Compaction & DB Immutability | Compaction occurs strictly in memory at inference time ($1 \dots N-4$ compressed, last 4 raw); PostgreSQL `messages` table remains 100% append-only and immutable. |
 | **D38** | Redis Stream Replay Buffer & SSE Streaming Pipeline | Sliding 10-minute TTL buffer (`chat_stream:{message_id}`) with `XADD`/`XREAD` for seamless `Last-Event-ID` reconnection recovery; typed SSE protocol (`step`, `token`, `citations`, `action_card`, `suggestions`, `done`). |
+| **D39** | Zero-Write/Zero-Mutate Connector Security & Explicit Scoping Invariant | External MCP integrations (GitHub, Google Drive) strictly enforce read-only access (HTTP GET only; POST/PUT/DELETE/PATCH prohibited). Default knowledge retrieval routes exclusively to internal 3D RBAC RAG; external connectors are triggered ONLY via explicit user invocation, preventing context pollution and rate-limit exhaustion. |
 
 ---
 *End of Product Requirement Document (PRD v2.7.0) — Project Cortex (AAD-H1)*
