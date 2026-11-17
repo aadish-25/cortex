@@ -169,6 +169,7 @@ class LLMService:
                         messages=messages,
                         api_key=active_key,
                         temperature=temperature,
+                        timeout=20.0,
                     )
                     latency_ms = (time.perf_counter() - start_t) * 1000
                     response = cast(ModelResponse, raw_response)
@@ -301,6 +302,7 @@ class LLMService:
                         api_key=active_key,
                         response_format=response_model,
                         temperature=temperature,
+                        timeout=20.0,
                     )
                     latency_ms = (time.perf_counter() - start_t) * 1000
                     response = cast(ModelResponse, raw_response)

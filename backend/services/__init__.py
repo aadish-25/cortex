@@ -9,9 +9,14 @@ from backend.services.retrieval import (
     updating_policy_probe,
 )
 from backend.services.orchestration import (
+    action_engine,
+    action_guard,
     dag_orchestrator,
     query_planner,
     web_search_service,
+)
+from backend.services.integrations import (
+    jira_service,
 )
 
 __all__ = [
@@ -29,4 +34,7 @@ __all__ = [
     "dag_orchestrator",
     "query_planner",
     "web_search_service",
+    "action_guard",
+    "action_engine",
+    "jira_service",
 ]
