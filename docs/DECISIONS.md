@@ -368,3 +368,37 @@ To bridge conversational RAG with enterprise workplace actions while preventing 
 - **15-Minute TTL State Machine**: Action drafts expire strictly 15 minutes after generation to eliminate stale transactions. Execution is strictly idempotent: confirming an already committed draft returns the existing ticket without duplicating issues in Jira.
 - **Atlassian REST API v3 & ADF Compliance**: Tickets are formatted in Atlassian Document Format (ADF) with structured metadata, priority mapping, domain parameter bullet lists, and requester identity.
 - **Upstream Rate Limiting**: Token-bucket rate limiter enforces 60 requests/minute (burst 10) on Jira endpoints, inspecting `Retry-After` headers and applying exponential backoff with full jitter on `HTTP 429`.
+
+---
+
+## D36 — Two-Tier Long-Term Memory (LTM) Architecture
+
+To provide instantaneous user personalization without context bloat or high retrieval latency:
+- **Hot Core User Profile (Tier 1)**: Key-value profile stored in database and injected into the immutable System Prompt prefix on every turn (<5ms overhead, prompt cache preserved).
+- **Cold Archival Episodic Memory (Tier 2)**: Persistent Qdrant vector collection (`cortex_user_memories`, 384d cosine) searched on-demand at runtime (<50ms) filtered strictly by `user_id`.
+- **Autonomous Post-Turn Extraction**: Fast LLM runs in the background extracting structured durable facts into 5 categories (`preference`, `tech_stack`, `project_context`, `location`, `general`).
+- **Semantic Deduplication**: Pre-insertion vector search at 0.85 similarity threshold merges or deduplicates existing memories without storing redundant entries.
+
+---
+
+## D37 — 8,000-Token Rolling Context Compaction & Database Ledger Immutability
+
+To sustain long enterprise conversations without blowing LLM context ceilings or losing historical accuracy:
+- **PostgreSQL Ledger Immutability**: The `messages` table is an append-only, immutable event ledger. Compaction never modifies, deletes, or truncates database records.
+- **8,000-Token Context Ceiling**: Exact tiktoken (`cl100k_base`) BPE token counter enforces an 8,000 token ceiling. When conversation history exceeds this limit, turns $1 \dots N-4$ are compressed into an `[Executive Context Summary]`, while the most recent 4 raw turns remain untouched.
+- **Lazy Compaction Hysteresis**: Rolling executive summary is cached in `Conversation.summary`. Compaction triggers lazily only when `tokens(summary) + tokens(recent_turns) > 8,000`, eliminating repetitive and lossy summarization on every turn.
+
+---
+
+## D38 — Redis Stream Replay Buffer & SSE Streaming Pipeline
+
+To provide resilient, real-time token streaming with automatic reconnection recovery:
+- **Redis Stream Buffer**: Assistant streaming tokens and events are cached in Redis Streams (`chat_stream:{message_id}`) with a 10-minute sliding TTL.
+- **Last-Event-ID Recovery**: Disconnected clients reconnect passing `Last-Event-ID` header; the server replays missed events via `XREAD` from the exact stream offset before continuing live streaming.
+- **Typed SSE Event Taxonomy**: Clean, structured event stream:
+  - `step`: Granular pipeline execution milestones (e.g. `query_planning`, `retrieval`, `reranking`, `action_draft`).
+  - `token`: Incremental Markdown text chunk.
+  - `citations`: List of verified document references.
+  - `action_card`: 15-minute ActionDraft payload.
+  - `suggestions`: Exactly 2 dynamic follow-up prompt pills.
+  - `done`: Final metadata payload with token counts, latency, and message ID.
