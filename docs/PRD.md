@@ -506,14 +506,44 @@ When a query requires external verification (e.g. current tax amendments, market
 To balance multi-turn conversational continuity with context window cost and latency:
 - **Exact BPE Token Counting**: Uses OpenAI `tiktoken` (`cl100k_base` encoding) with a character-based fallback (`len(text) // 4`) for precise budget tracking.
 - **Context Ceiling (`MAX_CONVERSATION_TOKENS`)**: Configured to **8,000 tokens** (accommodating ~25–35 conversational turns in modern 32k/128k context windows).
-- **In-Memory Rolling Compaction (Decision D37)**:
-  - When the cumulative token count of conversation history exceeds 8,000 tokens, Cortex triggers in-memory rolling compaction.
-  - Older dialogue turns ($1 \dots N-4$) are compressed via Fast LLM into an `[Executive Context Summary]`.
-  - The most recent **4 turns** are preserved verbatim to maintain conversational nuance, immediate pronouns, and recent follow-up context.
-- **Database Ledger Immutability**:
-  - The PostgreSQL `messages` table functions as an **append-only, immutable ledger**.
-  - Messages are **never** truncated, deleted, or altered in PostgreSQL during compaction. Every historical turn is permanently retrievable verbatim by the user or for enterprise compliance audits.
-- **Turn 1 Auto-Titling**: On the first conversational turn, Fast LLM asynchronously analyzes the initial user message and updates `Conversation.title` with a concise 3–5 word descriptive title (e.g., *"PostgreSQL Connection Pool Setup"*), replacing the default *"New Conversation"*.
+
+#### 6.5.1 Database Ledger Immutability vs. Inference Context
+A foundational architectural invariant in Cortex is the **strict separation between database persistence and inference context**:
+1. **Append-Only Immutable Database**:
+   - The PostgreSQL `messages` table is an **append-only, immutable event ledger**.
+   - Every raw user message and assistant response (including complete markdown, citations JSON array, timestamps, and parent message variants) is permanently persisted exactly as uttered.
+   - **Compaction NEVER deletes, updates, prunes, or overwrites database rows.**
+   - When users scroll back through chat history or when audit compliance tools invoke `GET /api/v1/chat/conversations/{id}/messages`, Cortex returns 100% of the raw, uncompressed turns in chronological order.
+2. **In-Memory Dynamic Context Synthesis**:
+   - Compaction exists **strictly in volatile working memory** during the preparation of the LLM prompt context window.
+   - The database remains the single source of truth for full-fidelity corporate records.
+
+#### 6.5.2 Lazy Compaction Hysteresis (Why We Do NOT Summarize on Every Turn)
+A naive rolling summarizer that recompresses chat history on every turn introduces severe production pathologies:
+- **Catastrophic Latency & Cost**: Re-invoking an LLM summarizer on every turn adds 1,500–2,500ms of latency and consumes redundant tokens on each turn.
+- **Iterative Semantic Degradation**: "Summarizing a summary of a summary" causes progressive loss of critical details, numbers, and constraints.
+
+To eliminate this, Cortex standardizes on **Lazy Compaction with Hysteresis**:
+```mermaid
+flowchart TD
+    Start[User Turn Arrives] --> Fetch[Fetch History from DB]
+    Fetch --> CheckCached{Cached Summary Exists on Conversation?}
+    CheckCached -->|Yes| Combined[Tokens = Summary + Recent 4 Turns]
+    CheckCached -->|No| Combined[Tokens = Full Raw History]
+    Combined --> CheckCeiling{Tokens > 8,000?}
+    CheckCeiling -->|No: < 8,000 Tokens| Pass[Return Context Window Directly\n- Zero Summarization Calls\n- Sub-millisecond Execution]
+    CheckCeiling -->|Yes: > 8,000 Tokens| Summarize[One-off Fast LLM Summarization\n- Compress turns 1..N-4 into Brief\n- Preserve last 4 turns verbatim\n- Cache Brief in Conversation.summary]
+    Summarize --> Pass
+```
+
+- **Hysteresis Mechanics in Practice**:
+  - Suppose a conversation reaches **50 messages**:
+  - Turns 1–20 (~4,000 tokens): Total tokens remain $< 8,000$. **Zero summarization calls occur.** All messages are passed raw.
+  - Turn 21 (crosses 8,000 tokens): Rolling compaction triggers **once**. Older turns (1–17) are summarized into a concise ~200-word executive brief stored in `Conversation.summary`. Turns 18–21 (the last 4 turns) remain verbatim.
+  - **The Context Window Drops Immediately**: The active prompt payload drops from 8,100 tokens down to ~1,500 tokens (200 tokens summary + 1,300 tokens recent turns).
+  - Turns 22 through 45: On every subsequent turn, Cortex loads `Conversation.summary` and appends only the unsummarized recent turns. Because $1,500 + \text{accumulated tokens} \le 8,000$, **zero LLM summarizer calls occur for the next 20+ turns!**
+  - Summarization is an **infrequent, high-efficiency event** (triggering perhaps once or twice in a 50-turn dialogue), ensuring 95%+ of user turns execute with zero summarization latency overhead.
+- **Turn 1 Auto-Titling**: On the initial turn of a new session, Fast LLM asynchronously inspects the user's opening prompt and writes a concise 3–5 word descriptive title (e.g., *"PostgreSQL Connection Pool Setup"*), replacing the default *"New Conversation"*.
 
 ### 6.6 Two-Tier Long-Term Memory (LTM) Architecture (Decision D36)
 Appending sprawling user histories to every turn degrades latency and blows through prompt token budgets. Conversely, forcing the LLM to call a tool just to know the user's name adds unnecessary round-trip overhead. To solve both problems, Cortex standardizes on a **Two-Tier Production Long-Term Memory Architecture**:
