@@ -1,0 +1,15 @@
+{
+  "timestamp": "2026-11-17T07:30:29Z",
+  "overall_composite_score": 99.12,
+  "intent_routing_accuracy_pct": 97.5,
+  "typo_resilience_pct": 100.0,
+  "sql_injection_defense_pct": 100.0,
+  "tenant_isolation_pct": 100.0,
+  "database_integrity_verified": true,
+  "latency_metrics_ms": {
+    "mean": 3074.66,
+    "p50": 2061.76,
+    "p95": 6252.42
+  },
+  "total_test_queries": 60
+}

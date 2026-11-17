@@ -146,6 +146,7 @@ async def get_leave_balance(
     total_available = balance.paid_leave_days + balance.sick_leave_days + balance.casual_leave_days
 
     return {
+        "user_id": str(user_id),
         "paid_leave_days": balance.paid_leave_days,
         "sick_leave_days": balance.sick_leave_days,
         "casual_leave_days": balance.casual_leave_days,
@@ -233,7 +234,7 @@ async def classify_sql_lookup_intent(query: str) -> Tuple[SQLLookupIntent, Dict[
         "Classify the user's operational query into exactly one of these intents:\n"
         "- MY_TICKETS: User asking to view, list, or check their own tickets or issues (handles typos like 'tiiickets', 'my ticets', 'open bugs').\n"
         "- TICKET_STATUS: User querying the specific status, progress, or state of a specific ticket or UUID.\n"
-        "- LEAVE_BALANCE: User asking about their leave balances, vacation days, sick leaves, casual leaves, time off (e.g., 'how many leaves left', 'my sick leave balance').\n"
+        "- LEAVE_BALANCE: User asking to check their own personal leave balance, remaining vacation days, sick leaves, casual leaves, time off (e.g., 'how many leaves left', 'my sick leave balance'). NOTE: General policy rules questions (e.g. 'can employees carry forward leaves') belong to UNKNOWN.\n"
         "- DEPARTMENT_HEAD: User asking who leads, manages, directs, or heads a department, or requesting department manager contact details (e.g., 'head of engineering', 'who runs hr', 'finance lead', 'HR manager contact details').\n"
         "- USER_PROFILE: User asking about their own identity, role, department, clearance, or profile (e.g., 'who am i', 'what is my department').\n"
         "- UNKNOWN: None of the above.\n\n"
