@@ -197,3 +197,72 @@ async def test_dag_orchestrator_end_to_end_execution():
         assert len(response.final_response) > 0
         assert len(response.citations) > 0
         assert ("2,500" in response.final_response) or ("meal" in response.final_response.lower())
+
+
+@pytest.mark.asyncio
+async def test_execute_task_github_search():
+    """Verifies execute_task routes GITHUB_SEARCH to GitHubService and extracts citations."""
+    client = get_qdrant_client()
+    async with async_session() as session:
+        user = User(
+            username="eng_dev",
+            email="eng.dev@cortex.local",
+            hashed_password="x",
+            role=Role.EMPLOYEE,
+            department="Engineering",
+            clearance_level=ClearanceLevel.INTERNAL,
+        )
+
+        task = PlanTask(
+            id=1,
+            type=PlanTaskType.GITHUB_SEARCH,
+            query="search auth_service code",
+        )
+
+        output, citations = await execute_task(
+            task=task,
+            client=client,
+            session=session,
+            user=user,
+            scoped_upstream_context={},
+        )
+
+        assert output["status"] == "SUCCESS"
+        assert len(output["items"]) > 0
+        assert len(citations) > 0
+        assert any("github.com" in c for c in citations)
+
+
+@pytest.mark.asyncio
+async def test_execute_task_google_drive_search():
+    """Verifies execute_task routes DRIVE_SEARCH to GoogleDriveService and extracts citations."""
+    client = get_qdrant_client()
+    async with async_session() as session:
+        user = User(
+            username="hr_specialist",
+            email="hr.spec@cortex.local",
+            hashed_password="x",
+            role=Role.EMPLOYEE,
+            department="HR",
+            clearance_level=ClearanceLevel.INTERNAL,
+        )
+
+        task = PlanTask(
+            id=1,
+            type=PlanTaskType.DRIVE_SEARCH,
+            query="Medical Policy Runbook",
+        )
+
+        output, citations = await execute_task(
+            task=task,
+            client=client,
+            session=session,
+            user=user,
+            scoped_upstream_context={},
+        )
+
+        assert output["status"] == "SUCCESS"
+        assert len(output["files"]) > 0
+        assert len(citations) > 0
+        assert any("docs.google.com" in c for c in citations)
+

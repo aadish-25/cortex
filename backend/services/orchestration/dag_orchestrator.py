@@ -135,6 +135,28 @@ async def execute_task(
                 "message": str(exc),
             }, []
 
+    # 6. GitHub Codebase & Issue Discovery (Phase 6.2 MCP)
+    elif task.type == PlanTaskType.GITHUB_SEARCH:
+        from backend.services.integrations.github_service import github_service
+        q_lower = task.query.lower()
+        if any(w in q_lower for w in ["pull request", "pr ", "prs"]):
+            gh_result = await github_service.list_pull_requests()
+            citations = [pr.get("html_url") for pr in gh_result.get("pull_requests", []) if pr.get("html_url")]
+        elif any(w in q_lower for w in ["issue", "bug"]):
+            gh_result = await github_service.list_issues()
+            citations = [iss.get("html_url") for iss in gh_result.get("issues", []) if iss.get("html_url")]
+        else:
+            gh_result = await github_service.search_code(query=task.query)
+            citations = [item.get("html_url") for item in gh_result.get("items", []) if item.get("html_url")]
+        return gh_result, citations
+
+    # 7. Google Drive Shared Documents Discovery (Phase 6.2 MCP)
+    elif task.type == PlanTaskType.DRIVE_SEARCH:
+        from backend.services.integrations.google_drive_service import google_drive_service
+        drive_result = await google_drive_service.search_files(query=task.query)
+        citations = [f.get("webViewLink") for f in drive_result.get("files", []) if f.get("webViewLink")]
+        return drive_result, citations
+
     return None, []
 
 
@@ -174,6 +196,22 @@ def synthesis_join_node(
                 response_sections.append(output.get("message") or f"**Action Ready for Review:** {output.get('action')}")
             elif output.get("status") == "ACTION_REFUSED":
                 response_sections.append(f"**Action Notice:** {output.get('message')}")
+            elif output.get("status") == "RATE_LIMITED":
+                response_sections.append(f"> ⚠️ {output.get('message')}")
+            elif output.get("items"):  # GitHub code search
+                items = [f"- [`{item['name']}`]({item['html_url']}): {item.get('path')}" for item in output["items"]]
+                response_sections.append(f"### GitHub Code Search ({output.get('query')})\n" + "\n".join(items))
+            elif output.get("pull_requests"):  # GitHub PRs
+                prs = [f"- [PR #{pr['number']}: {pr['title']}]({pr['html_url']}) ({pr['state']}, by @{pr['author']})" for pr in output["pull_requests"]]
+                response_sections.append("### GitHub Pull Requests\n" + "\n".join(prs))
+            elif output.get("issues"):  # GitHub Issues
+                issues = [f"- [Issue #{iss['number']}: {iss['title']}]({iss['html_url']}) ({iss['state']}, by @{iss['author']})" for iss in output["issues"]]
+                response_sections.append("### GitHub Issues\n" + "\n".join(issues))
+            elif output.get("files"):  # Google Drive search
+                files = [f"- [{f['name']}]({f.get('webViewLink', '#')}) (Type: {f.get('mimeType', 'unknown')})" for f in output["files"]]
+                response_sections.append(f"### Google Drive Search ({output.get('query')})\n" + "\n".join(files))
+            elif output.get("content"):  # File content read
+                response_sections.append(f"### Document Content: {output.get('name') or output.get('id')}\n```\n{output['content'][:1000]}\n```")
             else:
                 response_sections.append(output.get("message", ""))
 

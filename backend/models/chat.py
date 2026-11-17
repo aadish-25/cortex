@@ -74,6 +74,8 @@ class PlanTaskType(str, Enum):
     EXTERNAL_WEB = "EXTERNAL_WEB"          # Sanitized external search
     STRUCTURED_LOOKUP = "STRUCTURED_LOOKUP"# Parameterized SQL queries (Phase 4)
     ACTION_WORKFLOW = "ACTION_WORKFLOW"    # HITL Jira ticketing (Phase 4)
+    GITHUB_SEARCH = "GITHUB_SEARCH"        # Read-only code, PRs, issues (Phase 6)
+    DRIVE_SEARCH = "DRIVE_SEARCH"          # Read-only Shared Drive & Docs (Phase 6)
     DIRECT_CHAT = "DIRECT_CHAT"            # Chit-chat, greetings, clarifications
 
 

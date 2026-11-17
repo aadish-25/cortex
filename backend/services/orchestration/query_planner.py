@@ -54,7 +54,7 @@ class LLMQueryRewrite(BaseModel):
 class LLMPlanTask(BaseModel):
     id: int = Field(description="Sequential task integer ID, e.g. 1, 2, 3")
     type: PlanTaskType = Field(
-        description="Task intent type: INTERNAL_RAG for company knowledge, EXTERNAL_WEB for internet search, STRUCTURED_LOOKUP for SQL DB queries, ACTION_WORKFLOW for drafting/submitting Jira tickets, DIRECT_CHAT for greetings/chit-chat"
+        description="Task intent type: INTERNAL_RAG for company knowledge, EXTERNAL_WEB for internet search, STRUCTURED_LOOKUP for SQL DB queries, ACTION_WORKFLOW for drafting/submitting Jira tickets, GITHUB_SEARCH for code/PR/issue search, DRIVE_SEARCH for Google Drive/Docs search, DIRECT_CHAT for greetings/chit-chat"
     )
     query: str = Field(description="Focused query, action instruction, or message for this specific task")
     depends_on: List[int] = Field(default_factory=list, description="IDs of prerequisite tasks that must complete first")
@@ -193,6 +193,10 @@ def classify_task_intent(query_text: Optional[str] = None) -> PlanTaskType:
         return PlanTaskType.STRUCTURED_LOOKUP
     elif any(k in q_lower for k in ["draft", "raise ticket", "create ticket", "file complaint", "apply for leave", "submit dispute"]):
         return PlanTaskType.ACTION_WORKFLOW
+    elif any(k in q_lower for k in ["github", "pull request", "repo", "pr #", "git commit", "codebase", "branch"]):
+        return PlanTaskType.GITHUB_SEARCH
+    elif any(k in q_lower for k in ["google drive", "shared drive", "gdoc", "drive file", "google doc"]):
+        return PlanTaskType.DRIVE_SEARCH
     elif any(k in q_lower for k in ["external", "market price", "latest 2026", "web search", "google", "flight benchmark", "news"]):
         return PlanTaskType.EXTERNAL_WEB
 
@@ -273,6 +277,8 @@ async def plan_and_decompose_query(
             "- EXTERNAL_WEB: Public internet search for outside market data, flights, general news, tax benchmarks.\n"
             "- STRUCTURED_LOOKUP: Internal SQL lookups for user leave balances, ticket status, department managers.\n"
             "- ACTION_WORKFLOW: Drafting or submitting Jira service tickets, equipment orders, leave requests.\n"
+            "- GITHUB_SEARCH: Search code repositories, view pull requests, issues, or inspect code files in GitHub.\n"
+            "- DRIVE_SEARCH: Search company Google Shared Drive, Google Docs, or fetch shared file contents.\n"
             "- DIRECT_CHAT: Greetings, conversational pleasantries ('What's up', 'kya chal raha hai', 'who are you'), or general banter.\n\n"
             "Rules:\n"
             "- Decompose compound prompts into discrete, standalone sub-tasks.\n"
