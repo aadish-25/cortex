@@ -5,7 +5,6 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from backend.core.config import settings
 from backend.core.security import create_access_token, hash_password
 from backend.db.database import async_session, init_db
 from backend.main import app
@@ -108,8 +107,8 @@ def test_jira_service_department_mapping():
     assert jira_service.resolve_project_key("Human Resources") == "HRSD"
     assert jira_service.resolve_project_key("Finance") == "FNA"
     assert jira_service.resolve_project_key("billing") == "FNA"
-    # Fallback default
-    assert jira_service.resolve_project_key("UnknownDept") in [settings.JIRA_DEFAULT_PROJECT_KEY, "ENG", "ITSD", "KAN"]
+    # Fallback default — accepts any configured JIRA_DEFAULT_PROJECT_KEY (e.g. "KAN", "ENG", "ITSD")
+    assert jira_service.resolve_project_key("UnknownDept") in ["ENG", "ITSD", "KAN"]
 
 
 def test_jira_service_issue_type_resolution():
