@@ -8,10 +8,10 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from backend.database import async_session, init_db
+from backend.db.database import async_session, init_db
 from backend.models.enums import ClearanceLevel, Role
 from backend.models.user import User
-from backend.security import hash_password
+from backend.core.security import hash_password
 
 INITIAL_USERS = [
     {

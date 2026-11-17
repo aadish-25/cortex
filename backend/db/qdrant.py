@@ -12,9 +12,9 @@ logger = logging.getLogger(__name__)
 def get_qdrant_client(url: Optional[str] = None) -> QdrantClient:
     """
     Client factory for Qdrant vector database.
-    - If URL is ':memory:', runs an embedded in-memory instance (ideal for isolated testing).
+    - If URL is explicitly ':memory:', returns an isolated in-memory client.
     - Otherwise connects to settings.QDRANT_URL with timeout.
-    - Gracefully falls back to embedded in-memory mode if remote server is unreachable during local dev.
+    - If Qdrant is unreachable, raises ConnectionError with an actionable message.
     """
     target_url = url or settings.QDRANT_URL
 
@@ -31,12 +31,13 @@ def get_qdrant_client(url: Optional[str] = None) -> QdrantClient:
         client.get_collections()
         return client
     except Exception as exc:
-        logger.warning(
-            "Could not connect to Qdrant at %s (%s). Falling back to embedded in-memory Qdrant.",
-            target_url,
-            exc,
+        err_msg = (
+            f"Could not connect to Qdrant vector database at '{target_url}'. "
+            "Please ensure Docker Desktop is running and launch required containers "
+            f"via 'python run.py' or 'docker compose up -d'. Details: {exc}"
         )
-        return QdrantClient(":memory:")
+        logger.error(err_msg)
+        raise ConnectionError(err_msg) from exc
 
 
 def init_qdrant_collection(client: QdrantClient, collection_name: Optional[str] = None) -> None:
