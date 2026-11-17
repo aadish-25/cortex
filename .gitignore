@@ -24,6 +24,11 @@ frontend/dist/
 frontend-experiments/
 scripts/capture_*.py
 
+# Logs
+logs/**/*.log
+logs/*.log
+!logs/**/.gitkeep
+
 # OS and IDE files
 .DS_Store
 Thumbs.db

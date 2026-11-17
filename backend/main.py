@@ -3,11 +3,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.core.config import settings
+from backend.core.logging_config import setup_logging
 from backend.db.database import init_db
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Initialize enterprise rotating file logging into cortex/logs/general/
+    setup_logging(mode="general")
     # Initialize database tables on startup
     await init_db()
     yield

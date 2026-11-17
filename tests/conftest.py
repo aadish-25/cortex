@@ -7,7 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # Ensure project root is in sys.path for pytest (Problem 2 in PROBLEMS_ENCOUNTERED.md)
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from backend.core.logging_config import setup_logging
 from backend.db.database import async_session, init_db
+
+# Initialize structured test logging into cortex/logs/test/
+setup_logging(mode="test")
 
 # NOTE ON CONFTEST.PY FIXTURES:
 # By definition, pytest automatically discovers and loads 'conftest.py' at startup.
