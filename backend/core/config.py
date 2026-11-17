@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     JIRA_API_TOKEN: str = ""
     JIRA_DEFAULT_PROJECT_KEY: str = "ITSD"
 
+    # External MCP Integrations (Phase 6)
+    GITHUB_API_TOKEN: str = ""
+    GITHUB_DEFAULT_REPO: str = ""
+    GOOGLE_DRIVE_API_KEY: str = ""
+    GOOGLE_DRIVE_ROOT_FOLDER_ID: str = ""
+
     # Provider Default Models
     GROQ_DEFAULT_MODEL: str = "groq/qwen/qwen3.8-27b"
     OPENROUTER_DEFAULT_MODEL: str = "openrouter/nvidia/nemotron-3.5-lightning:free"
