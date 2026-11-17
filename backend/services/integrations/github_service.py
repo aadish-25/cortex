@@ -28,8 +28,8 @@ class GitHubService:
         token: Optional[str] = None,
         default_repo: Optional[str] = None,
     ) -> None:
-        self.token = (token or settings.GITHUB_API_TOKEN).strip()
-        self.default_repo = (default_repo or settings.GITHUB_DEFAULT_REPO).strip()
+        self.token = (token if token is not None else settings.GITHUB_API_TOKEN).strip()
+        self.default_repo = (default_repo if default_repo is not None else settings.GITHUB_DEFAULT_REPO).strip()
 
     @property
     def is_configured(self) -> bool:

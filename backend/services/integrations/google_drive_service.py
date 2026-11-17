@@ -28,9 +28,9 @@ class GoogleDriveService:
         oauth_token: Optional[str] = None,
         root_folder_id: Optional[str] = None,
     ) -> None:
-        self.api_key = (api_key or settings.GOOGLE_DRIVE_API_KEY).strip()
-        self.oauth_token = (oauth_token or "").strip()
-        self.root_folder_id = (root_folder_id or settings.GOOGLE_DRIVE_ROOT_FOLDER_ID).strip()
+        self.api_key = (api_key if api_key is not None else settings.GOOGLE_DRIVE_API_KEY).strip()
+        self.oauth_token = (oauth_token if oauth_token is not None else "").strip()
+        self.root_folder_id = (root_folder_id if root_folder_id is not None else settings.GOOGLE_DRIVE_ROOT_FOLDER_ID).strip()
 
     @property
     def is_configured(self) -> bool:
