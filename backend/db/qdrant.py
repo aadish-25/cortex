@@ -81,3 +81,27 @@ def init_qdrant_collection(client: QdrantClient, collection_name: Optional[str] 
             )
         except UnexpectedResponse:
             pass
+
+
+def init_user_memories_collection(client: QdrantClient, collection_name: Optional[str] = None) -> None:
+    """Initializes the archival user memories collection in Qdrant (Tier 2 Cold LTM)."""
+    target_collection = collection_name or settings.QDRANT_USER_MEMORIES_COLLECTION
+
+    if not client.collection_exists(target_collection):
+        client.create_collection(
+            collection_name=target_collection,
+            vectors_config=models.VectorParams(
+                size=384,
+                distance=models.Distance.COSINE,
+            ),
+        )
+        logger.info("Created Qdrant user memories collection: %s", target_collection)
+
+    try:
+        client.create_payload_index(
+            collection_name=target_collection,
+            field_name="user_id",
+            field_schema=models.PayloadSchemaType.KEYWORD,
+        )
+    except UnexpectedResponse:
+        pass

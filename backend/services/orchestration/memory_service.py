@@ -26,10 +26,30 @@ MAX_CONVERSATION_TOKENS = 4000
 RAW_PRESERVED_TURNS = 4
 
 
+_tiktoken_encoder = None
+
+
+def get_token_encoder():
+    global _tiktoken_encoder
+    if _tiktoken_encoder is None:
+        try:
+            import tiktoken
+            _tiktoken_encoder = tiktoken.get_encoding("cl100k_base")
+        except Exception:
+            _tiktoken_encoder = False
+    return _tiktoken_encoder
+
+
 def estimate_token_count(text: str) -> int:
-    """Fast deterministic token estimator (approx 1 token per 3.8 characters)."""
+    """Exact token counting via tiktoken (cl100k_base) with fast heuristic fallback."""
     if not text:
         return 0
+    enc = get_token_encoder()
+    if enc:
+        try:
+            return len(enc.encode(text, disallowed_special=()))
+        except Exception:
+            pass
     return max(1, int(len(text) / 3.8))
 
 
@@ -81,11 +101,12 @@ class MemoryService:
         sender: str,
         content: str,
         citations: Optional[List[str]] = None,
+        message_id: Optional[uuid.UUID] = None,
     ) -> Message:
         """Persists a new user or assistant message to the database."""
         cites_json = json.dumps(citations) if citations else None
         msg = Message(
-            id=uuid.uuid4(),
+            id=message_id or uuid.uuid4(),
             conversation_id=conversation_id,
             sender=sender,
             content=content,

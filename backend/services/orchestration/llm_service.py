@@ -4,7 +4,7 @@ import logging
 import os
 import re
 import time
-from typing import Any, Dict, List, Optional, Tuple, Type, TypeVar, cast
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Type, TypeVar, cast
 import uuid
 
 from pydantic import BaseModel
@@ -243,6 +243,143 @@ class LLMService:
             logger.warning("[%s] All keys in pool exhausted. Cascading to next provider.", provider_name)
 
         raise RuntimeError("All configured LLM providers (Groq, OpenRouter, Gemini) failed.")
+
+    async def generate_stream(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        messages: Optional[List[Dict[str, str]]] = None,
+        model: Optional[str] = None,
+        temperature: float = 0.2,
+        user_id: Optional[uuid.UUID] = None,
+        session: Optional[AsyncSession] = None,
+    ) -> AsyncIterator[str]:
+        """
+        Executes streaming text generation cascading through Groq -> OpenRouter -> Gemini.
+        Yields token deltas as they arrive from the upstream LLM.
+        Tracks token consumption and records commercial cost upon stream completion.
+        """
+        if not self.is_configured():
+            logger.warning("No LLM API keys configured. LLM streaming unavailable.")
+            return
+
+        formatted_messages = list(messages) if messages is not None else []
+        if not formatted_messages:
+            if system_prompt:
+                formatted_messages.append({"role": "system", "content": system_prompt})
+            formatted_messages.append({"role": "user", "content": prompt})
+
+        cascade = self._get_provider_cascade()
+
+        for provider_name, pool, default_model in cascade:
+            if not pool.has_keys():
+                continue
+
+            if model and model.startswith(f"{provider_name}/"):
+                target_model = model
+            elif model and any(model.startswith(f"{p}/") for p in ["groq", "openrouter", "gemini"]):
+                target_model = default_model
+            else:
+                target_model = model or default_model
+
+            max_attempts = len(pool.valid_keys)
+
+            for _ in range(max_attempts):
+                active_key = pool.get_current_key()
+                if not active_key:
+                    break
+
+                key_mask = f"{active_key[:8]}...{active_key[-4:]}" if len(active_key) > 12 else active_key[:6] + "..."
+                start_t = time.perf_counter()
+
+                await rate_limiter.acquire(provider_name)
+
+                try:
+                    stream_resp = await litellm.acompletion(
+                        model=target_model,
+                        messages=formatted_messages,
+                        api_key=active_key,
+                        temperature=temperature,
+                        stream=True,
+                        timeout=30.0,
+                    )
+
+                    collected_tokens: List[str] = []
+                    async for chunk in stream_resp:
+                        choices = getattr(chunk, "choices", None)
+                        if choices:
+                            delta = getattr(choices[0], "delta", None)
+                            content = getattr(delta, "content", "") or ""
+                            if content:
+                                collected_tokens.append(content)
+                                yield content
+
+                    latency_ms = (time.perf_counter() - start_t) * 1000
+                    full_content = "".join(collected_tokens)
+                    from backend.services.orchestration.memory_service import estimate_token_count
+                    p_tok = sum(estimate_token_count(m.get("content", "")) for m in formatted_messages)
+                    c_tok = estimate_token_count(full_content)
+                    cost_calc = cost_tracker.calculate_cost(target_model, p_tok, c_tok, is_free_tier=True)
+
+                    try:
+                        await cost_tracker.record_usage(
+                            provider=provider_name,
+                            model=target_model,
+                            prompt_tokens=p_tok,
+                            completion_tokens=c_tok,
+                            user_id=user_id,
+                            is_free_tier=True,
+                            session=session,
+                        )
+                    except Exception as cost_err:
+                        logger.warning("Failed to record streaming token usage metrics: %s", cost_err)
+
+                    log_llm_interaction(
+                        provider=provider_name,
+                        model=target_model,
+                        user_prompt=prompt,
+                        response_content=full_content.strip(),
+                        system_prompt=system_prompt,
+                        api_key_masked=key_mask,
+                        prompt_tokens=p_tok,
+                        completion_tokens=c_tok,
+                        latency_ms=latency_ms,
+                        status="SUCCESS (STREAMED 200)",
+                        caller="generate_stream",
+                        estimated_cost=cost_calc.cost,
+                        transparency_badge=cost_calc.transparency_badge.value,
+                    )
+                    return
+
+                except Exception as exc:
+                    latency_ms = (time.perf_counter() - start_t) * 1000
+                    err_str = str(exc).lower()
+                    is_perm = any(code in err_str for code in ["401", "403", "unauthorized", "invalid_api_key"])
+
+                    log_llm_interaction(
+                        provider=provider_name,
+                        model=target_model,
+                        user_prompt=prompt,
+                        response_content=f"Stream Error: {exc}",
+                        system_prompt=system_prompt,
+                        api_key_masked=key_mask,
+                        latency_ms=latency_ms,
+                        status=f"FAILED ({type(exc).__name__})",
+                        caller="generate_stream",
+                    )
+                    logger.warning(
+                        "[%s] Stream key failed (%s). Attempting key rotation.",
+                        provider_name,
+                        "Permanent Auth Error" if is_perm else "Rate Limit / Provider Error",
+                    )
+                    if "429" in err_str or "rate limit" in err_str or "rate_limit" in err_str:
+                        headers = getattr(exc, "headers", None)
+                        await rate_limiter.handle_upstream_rate_limit(provider_name, headers=headers)
+                    pool.rotate_key(failed_key=active_key, is_permanent=is_perm)
+
+            logger.warning("[%s] All stream keys exhausted. Cascading to next provider.", provider_name)
+
+        raise RuntimeError("All configured LLM providers failed to stream response.")
 
     async def generate_structured(
         self,

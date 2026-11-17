@@ -67,6 +67,8 @@ class Settings(BaseSettings):
 
     # Internal pipeline constants
     QDRANT_COLLECTION: str = "cortex_documents"
+    QDRANT_USER_MEMORIES_COLLECTION: str = "cortex_user_memories"
+    MAX_CONVERSATION_TOKENS: int = 8000
     EMBEDDING_MODEL: str = "BAAI/bge-small-en-v1.5"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
     RERANKER_CONFIDENCE_THRESHOLD: float = 0.35
