@@ -1,6 +1,8 @@
 import os
 import sys
+import asyncio
 from collections.abc import AsyncGenerator
+import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,10 +23,10 @@ setup_logging(mode="test")
 # (e.g. `def test_xyz(db_session):`) and injects them automatically via dependency injection.
 
 
-@pytest_asyncio.fixture(autouse=True)
-async def setup_database():
-    """Ensure database tables are initialized before tests run."""
-    await init_db()
+@pytest.fixture(scope="session", autouse=True)
+def setup_database():
+    """Ensure database tables and schema migrations are initialized ONCE per test session."""
+    asyncio.run(init_db())
 
 
 @pytest_asyncio.fixture
