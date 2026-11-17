@@ -47,7 +47,7 @@ class EpisodicMemoryService:
 
     async def search_memories(
         self,
-        client: QdrantClient,
+        client: Optional[QdrantClient],
         user_id: uuid.UUID,
         query: str,
         limit: int = 3,
@@ -59,6 +59,10 @@ class EpisodicMemoryService:
         """
         if not query.strip():
             return []
+
+        if client is None:
+            from backend.db.qdrant import get_qdrant_client
+            client = get_qdrant_client()
 
         embeddings = generate_dense_embeddings([query])
         if not embeddings:
@@ -96,7 +100,7 @@ class EpisodicMemoryService:
 
     async def extract_and_store_memories(
         self,
-        client: QdrantClient,
+        client: Optional[QdrantClient],
         user_id: uuid.UUID,
         user_message: str,
     ) -> List[str]:
@@ -104,9 +108,12 @@ class EpisodicMemoryService:
         Autonomously extracts new persistent facts from user dialogue turns,
         runs semantic deduplication in Qdrant, and commits novel facts.
         """
-        # Fast heuristic: skip pure commands or trivial greetings
-        if len(user_message.strip()) < 15:
+        if not user_message or not user_message.strip():
             return []
+
+        if client is None:
+            from backend.db.qdrant import get_qdrant_client
+            client = get_qdrant_client()
 
         system_prompt = (
             "You are Cortex's Episodic Memory Extractor. "
@@ -221,11 +228,15 @@ class EpisodicMemoryService:
 
     async def delete_memory(
         self,
-        client: QdrantClient,
+        client: Optional[QdrantClient],
         user_id: uuid.UUID,
         memory_id: str,
     ) -> bool:
         """Deletes a specific memory point for privacy compliance."""
+        if client is None:
+            from backend.db.qdrant import get_qdrant_client
+            client = get_qdrant_client()
+
         try:
             # Verify ownership
             point = client.retrieve(
@@ -233,7 +244,7 @@ class EpisodicMemoryService:
                 ids=[memory_id],
                 with_payload=True,
             )
-            if not point or point[0].payload.get("user_id") != str(user_id):
+            if not point or not point[0].payload or point[0].payload.get("user_id") != str(user_id):
                 return False
 
             client.delete(
