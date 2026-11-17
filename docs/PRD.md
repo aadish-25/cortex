@@ -6,7 +6,7 @@
 | Document Metadata | Value |
 |---|---|
 | **Project Code** | Cortex (AAD-H1) |
-| **Document Version** | 2.3.0 (Enterprise Production Specification — JSM Ticketing, Rate Limiter & MCP Framework) |
+| **Document Version** | 2.6.0 (Enterprise JSM Ticketing Engine, 15-Minute ActionDraft State Machine & Rate Limiter) |
 | **Status** | Approved & In Active Implementation |
 | **Lead Technical Product Architect** | Cortex Core Engineering Group |
 | **Target Jurisdiction** | India Corporate Enterprise (INR `₹`, IST, Indian Statutory Frameworks) |

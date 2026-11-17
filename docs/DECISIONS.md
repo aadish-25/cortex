@@ -359,3 +359,12 @@ Infrastructure dependencies may crash or be terminated during server runtime (e.
 
 ---
 
+
+## D35 — Jira Service Management (JSM) Multi-Department Routing, Universal 4-Tier Taxonomy & 15-Minute ActionDraft State Machine
+
+To bridge conversational RAG with enterprise workplace actions while preventing queue spam and honoring strict Atlassian API limitations:
+- **Universal 4-Tier Taxonomy**: All workplace actions conform to a 4-tier taxonomy (`INCIDENT`, `SERVICE_REQUEST`, `INQUIRY`, `DISPUTE`) across departments (`Engineering` &rarr; `KAN`, `HR` &rarr; `HRSD`, `Finance` &rarr; `FNA`).
+- **Action Feasibility Guard**: Employs fast structured LLM routing combined with robust domain-aware heuristics to intercept and cleanly refuse frivolous non-work queries (*"Order pizza"*, *"My coffee is cold"*) while protecting legitimate corporate expense and reimbursement requests.
+- **15-Minute TTL State Machine**: Action drafts expire strictly 15 minutes after generation to eliminate stale transactions. Execution is strictly idempotent: confirming an already committed draft returns the existing ticket without duplicating issues in Jira.
+- **Atlassian REST API v3 & ADF Compliance**: Tickets are formatted in Atlassian Document Format (ADF) with structured metadata, priority mapping, domain parameter bullet lists, and requester identity.
+- **Upstream Rate Limiting**: Token-bucket rate limiter enforces 60 requests/minute (burst 10) on Jira endpoints, inspecting `Retry-After` headers and applying exponential backoff with full jitter on `HTTP 429`.
