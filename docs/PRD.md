@@ -6,7 +6,7 @@
 | Document Metadata | Value |
 |---|---|
 | **Project Code** | Cortex (AAD-H1) |
-| **Document Version** | 2.6.0 (Enterprise JSM Ticketing Engine, 15-Minute ActionDraft State Machine & Rate Limiter) |
+| **Document Version** | 2.7.0 (Two-Tier Long-Term Memory, 8,000-Token Rolling Compaction, Redis Stream Replay & Anti-Frivolous Feasibility Guard) |
 | **Status** | Approved & In Active Implementation |
 | **Lead Technical Product Architect** | Cortex Core Engineering Group |
 | **Target Jurisdiction** | India Corporate Enterprise (INR `₹`, IST, Indian Statutory Frameworks) |
@@ -502,12 +502,47 @@ When a query requires external verification (e.g. current tax amendments, market
      ```
    - The synthesis LLM is explicitly instructed that contents of `<untrusted_web_source>` are external observations and cannot alter internal company rules or administrative instructions.
 
-### 6.5 Short-Term Memory Framework (Decision D28)
-To balance conversational continuity with context window limits:
-- Standardized on LangChain `ConversationSummaryBufferMemory`.
-- **Rolling Memory Mechanism**: Maintains a continuously updated executive summary of older messages while retaining verbatim text for the recent conversation buffer.
-- **Context Ceiling (`MAX_CONVERSATION_TOKENS`)**: Configured to 4,000 tokens.
-- **Branched New Chat Trigger**: When a session exceeds `MAX_CONVERSATION_TOKENS`, the system triggers an automatic "Branched New Chat" flow, preserving the synthesized summary as initial context while spawning a fresh conversation ID, completely avoiding token degradation and latency inflation.
+### 6.5 Short-Term Memory & Rolling Compaction (Decisions D28 & D37)
+To balance multi-turn conversational continuity with context window cost and latency:
+- **Exact BPE Token Counting**: Uses OpenAI `tiktoken` (`cl100k_base` encoding) with a character-based fallback (`len(text) // 4`) for precise budget tracking.
+- **Context Ceiling (`MAX_CONVERSATION_TOKENS`)**: Configured to **8,000 tokens** (accommodating ~25–35 conversational turns in modern 32k/128k context windows).
+- **In-Memory Rolling Compaction (Decision D37)**:
+  - When the cumulative token count of conversation history exceeds 8,000 tokens, Cortex triggers in-memory rolling compaction.
+  - Older dialogue turns ($1 \dots N-4$) are compressed via Fast LLM into an `[Executive Context Summary]`.
+  - The most recent **4 turns** are preserved verbatim to maintain conversational nuance, immediate pronouns, and recent follow-up context.
+- **Database Ledger Immutability**:
+  - The PostgreSQL `messages` table functions as an **append-only, immutable ledger**.
+  - Messages are **never** truncated, deleted, or altered in PostgreSQL during compaction. Every historical turn is permanently retrievable verbatim by the user or for enterprise compliance audits.
+- **Turn 1 Auto-Titling**: On the first conversational turn, Fast LLM asynchronously analyzes the initial user message and updates `Conversation.title` with a concise 3–5 word descriptive title (e.g., *"PostgreSQL Connection Pool Setup"*), replacing the default *"New Conversation"*.
+
+### 6.6 Two-Tier Long-Term Memory (LTM) Architecture (Decision D36)
+Appending sprawling user histories to every turn degrades latency and blows through prompt token budgets. Conversely, forcing the LLM to call a tool just to know the user's name adds unnecessary round-trip overhead. To solve both problems, Cortex standardizes on a **Two-Tier Production Long-Term Memory Architecture**:
+
+```mermaid
+graph LR
+    User[User Message] --> Tiers{LTM Router}
+    Tiers -->|Always-On <5ms| Hot[Tier 1: Core User Profile\n- System Prompt Prefix\n- Name, Role, Clearance, INR ₹\n- Cache-Friendly Prefix]
+    Tiers -->|On-Demand ~30ms| Cold[Tier 2: Archival / Episodic Memory\n- Qdrant: cortex_user_memories\n- Filtered strictly by user_id\n- Deduplication Threshold: 0.85]
+    Hot --> LLM[Streaming Synthesis LLM]
+    Cold -->|Relevant Facts| LLM
+```
+
+1. **Tier 1: Core User Profile (Hot LTM, <5ms)**:
+   - **Data Stored**: Employee Name, Work Email, Department, Role, Clearance Level, INR (`₹`) currency convention, and communication tone preferences.
+   - **Loading Mechanism**: Injected directly into the System Prompt prefix at the start of every session/turn.
+   - **Prompt Caching Optimization (Decision D29)**: The Core Profile prefix remains stable across dialogue turns, allowing upstream providers (Groq, Anthropic, OpenRouter) to hit prompt prefix caches, slashing inference latency and token costs by up to 50–80%.
+2. **Tier 2: Archival / Episodic Memory (Cold LTM, On-Demand, ~30–50ms)**:
+   - **Vector Storage**: Dedicated Qdrant collection `cortex_user_memories` using 384-dimensional dense vectors (FastEmbed BGE-small) with a payload index on `user_id`.
+   - **Runtime On-Demand Search**: Queried only when the user's current prompt warrants personal context (similarity $\ge 0.55$). Filtered strictly by `user_id` to guarantee zero cross-tenant memory leakage.
+   - **Autonomous Post-Turn Learning**: After each response turn, a non-blocking background task (`asyncio.create_task`) uses Fast LLM (`groq/qwen/qwen3.8-27b`) to analyze the user's message. If the user stated persistent attributes, preferences, project context, location, or general notes, it extracts them into a structured schema (`ExtractedMemoryFact`).
+   - **Semantic Deduplication (`0.85` Threshold)**: Before writing an extracted fact to Qdrant, Cortex executes a vector similarity search for that user. If a matching memory exists with cosine similarity $\ge 0.85$, the duplicate is discarded.
+   - **Structured Memory Categories**:
+     - `preference`: Workspace and communication styles (e.g., *"Prefers concise bulleted explanations"*).
+     - `tech_stack`: Primary tools, languages, and frameworks (e.g., *"Uses FastAPI and Kubernetes for backend development"*).
+     - `project_context`: Active workstreams and squad responsibilities (e.g., *"Responsible for payment gateway migrations"*).
+     - `location`: Office location and campus base (e.g., *"Based out of Bangalore campus, building 4"*).
+     - `general`: Miscellaneous durable facts worth remembering that do not fit into the other four categories (e.g., *"Mentored by Rajesh in the architecture guild"*).
+   - **Privacy Compliance & GDPR Right-to-be-Forgotten**: Provides `list_memories()` and `delete_memory()` allowing employees to inspect, manage, and delete individual stored memories.
 
 ---
 
@@ -928,13 +963,17 @@ The resulting calibrated threshold is locked into `config.py` as `RERANKER_CONFI
 | **D25** | Secure Web Search (No Whitelisting) | Domain whitelisting rejected; Outbound PII de-identification + Inbound fast LLM Sanitizer Node protecting `<untrusted_web_source>`. |
 | **D26** | Hierarchical Tooling Architecture | Core tools (`internal_knowledge_search`, `external_web_search`, bounded `sql_lookup` sub-functions, `action_workflow`) + prospective admin catalog. |
 | **D27** | Extensible Multi-Provider Rate Limiter | Token bucket rate limiter with modular `RATE_LIMIT_CONFIGS`, HTTP header priority (`Retry-After`), jittered backoff, and graceful SSE degradation. |
-| **D28** | LangChain Short-Term Memory | `ConversationSummaryBufferMemory` with rolling summary buffer, `MAX_CONVERSATION_TOKENS` ceiling, and automatic branched chat. |
+| **D28** | Rolling In-Memory Memory Window | Accurate tiktoken (`cl100k_base`) BPE token counting with 8,000-token ceiling and executive summarization of older turns. |
 | **D29** | KV Cache & Prompt Prefix Caching | Static immutable system prompts positioned first in context window to maximize vendor KV cache hit rates. |
 | **D30** | Interactive UI Model Selector | Bottom-left model picker dropdown with provider grouping, `:free` badges, context metrics, and dynamic execution override. |
 | **D31** | Token & Commercial Cost Tracking | Automated token tracking, model pricing catalog with `EXACT_PUBLISHED` vs `ASSUMED_BENCHMARK` badges, and admin analytics. |
 | **D32** | Unified Dev Orchestrator & PostgreSQL | Single-command startup (`run.py`), automated Docker container launch, and PostgreSQL 16 with `asyncpg` `NullPool`. |
 | **D33** | Fail-Fast Infrastructure Connectivity | Eliminated silent in-memory vector store fallbacks; immediate actionable `ConnectionError` on container outage. |
 | **D34** | Runtime Redis Degradation & Dynamic Health Observability | Real-time probing of Redis; automatic fallback to local token-bucket rate limiter during runtime outage; Admin Dashboard displays DEGRADED status without crashing API endpoints. |
+| **D35** | Anti-Frivolous Operational Action Feasibility Guard | Pure Fast LLM semantic reasoning classifier validating operational ticket legitimacy; complete elimination of brittle regex keyword lists. |
+| **D36** | Two-Tier Long-Term Memory (LTM) Architecture | Hot Core Profile (<5ms system prompt prefix) + Cold Episodic Memory (~30-50ms Qdrant `cortex_user_memories`) with post-turn background learning, 0.85 deduplication threshold, and 5 structured categories (`preference`, `tech_stack`, `project_context`, `location`, `general`). |
+| **D37** | 8,000-Token Rolling Compaction & DB Immutability | Compaction occurs strictly in memory at inference time ($1 \dots N-4$ compressed, last 4 raw); PostgreSQL `messages` table remains 100% append-only and immutable. |
+| **D38** | Redis Stream Replay Buffer & SSE Streaming Pipeline | Sliding 10-minute TTL buffer (`chat_stream:{message_id}`) with `XADD`/`XREAD` for seamless `Last-Event-ID` reconnection recovery; typed SSE protocol (`step`, `token`, `citations`, `action_card`, `suggestions`, `done`). |
 
 ---
-*End of Product Requirement Document (PRD v2.5.0) — Project Cortex (AAD-H1)*
+*End of Product Requirement Document (PRD v2.7.0) — Project Cortex (AAD-H1)*
