@@ -26,6 +26,7 @@ DEFAULT_PROVIDER_LIMITS: Dict[str, ProviderRateConfig] = {
     "groq": ProviderRateConfig(requests_per_minute=30, burst_capacity=5),
     "openrouter": ProviderRateConfig(requests_per_minute=20, burst_capacity=4),
     "gemini": ProviderRateConfig(requests_per_minute=15, burst_capacity=3),
+    "jira": ProviderRateConfig(requests_per_minute=60, burst_capacity=10),
     "default": ProviderRateConfig(requests_per_minute=20, burst_capacity=3),
 }
 

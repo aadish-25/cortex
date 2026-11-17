@@ -36,6 +36,27 @@ class TicketStatus(str, Enum):
     FAILED = "FAILED"
 
 
+class TicketTaxonomy(str, Enum):
+    INCIDENT = "INCIDENT"
+    SERVICE_REQUEST = "SERVICE_REQUEST"
+    INQUIRY = "INQUIRY"
+    DISPUTE = "DISPUTE"
+
+
+class TicketPriority(str, Enum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    CRITICAL = "CRITICAL"
+
+
+class ActionDraftStatus(str, Enum):
+    PENDING = "PENDING"
+    CONFIRMED = "CONFIRMED"
+    DISCARDED = "DISCARDED"
+    EXPIRED = "EXPIRED"
+
+
 class FeedbackCategory(str, Enum):
     INACCURATE = "INACCURATE"
     MISSING_CONTEXT = "MISSING_CONTEXT"

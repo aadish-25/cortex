@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     META_API_KEY: str = ""
     JINA_API_KEY: str = ""
 
+    # Jira Service Management (JSM) & Atlassian Cloud Integration
+    JIRA_BASE_URL: str = ""
+    JIRA_API_EMAIL: str = ""
+    JIRA_API_TOKEN: str = ""
+    JIRA_DEFAULT_PROJECT_KEY: str = "ITSD"
+
     # Provider Default Models
     GROQ_DEFAULT_MODEL: str = "groq/qwen/qwen3.8-27b"
     OPENROUTER_DEFAULT_MODEL: str = "openrouter/nvidia/nemotron-3.5-lightning:free"
