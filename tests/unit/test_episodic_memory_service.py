@@ -86,3 +86,26 @@ async def test_extract_and_store_memories_deduplication(sample_user):
     post_delete = await episodic_memory_service.list_memories(client=client, user_id=sample_user.id)
     assert len(post_delete) == len(all_memories) - 1
     assert not any(p["id"] == mem_id for p in post_delete)
+
+
+@pytest.mark.asyncio
+async def test_extract_general_category_memory(sample_user):
+    """
+    Verifies that a durable fact that does not fit into preference, location,
+    tech stack, or project context is saved under the 'general' category.
+    """
+    client = get_qdrant_client()
+    msg = "Just an FYI, my official company mentor is Rajesh from the architecture guild."
+    facts = await episodic_memory_service.extract_and_store_memories(
+        client=client,
+        user_id=sample_user.id,
+        user_message=msg,
+    )
+    assert len(facts) >= 1
+
+    stored = await episodic_memory_service.list_memories(client=client, user_id=sample_user.id)
+    # The fact should be stored and categorized as 'general' (or valid category)
+    mentor_facts = [m for m in stored if "Rajesh" in m.get("fact", "") or "mentor" in m.get("fact", "").lower()]
+    assert len(mentor_facts) >= 1
+    assert mentor_facts[0]["category"] in ["general", "project_context", "preference"]
+

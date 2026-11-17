@@ -19,7 +19,10 @@ RETRIEVAL_SIMILARITY_THRESHOLD = 0.55
 
 class ExtractedMemoryFact(BaseModel):
     fact: str = Field(description="A concise, factual persistent user attribute, preference, project context, or habit")
-    category: str = Field(description="Category: 'preference', 'tech_stack', 'project_context', 'location'")
+    category: str = Field(
+        default="general",
+        description="Category: 'preference', 'tech_stack', 'project_context', 'location', or 'general' (for noteworthy personal facts that don't fit other categories)",
+    )
 
 
 class MemoryExtractionSchema(BaseModel):
@@ -110,10 +113,12 @@ class EpisodicMemoryService:
             "Analyze the user's message to identify if they shared any persistent personal facts, "
             "workplace preferences, office locations, project responsibilities, or technical preferences "
             "(e.g., 'I work on the payments service', 'My base office is Pune', 'I prefer Python for backend', "
-            "'I have a disability requiring ergonomic equipment').\n\n"
+            "'I have a disability requiring ergonomic equipment', 'My manager is Priya').\n\n"
             "Rules:\n"
             "1. ONLY extract clear, durable facts about the USER. Do NOT extract transient questions or temporary moods.\n"
-            "2. If no persistent facts are stated, return an empty list."
+            "2. Assign each fact a category: 'preference', 'tech_stack', 'project_context', 'location', "
+            "or 'general' (for persistent facts worth saving that do not fit into the other categories).\n"
+            "3. If no persistent facts are stated, return an empty list."
         )
 
         try:
