@@ -26,17 +26,19 @@ MAX_CONVERSATION_TOKENS = settings.MAX_CONVERSATION_TOKENS
 RAW_PRESERVED_TURNS = 4
 
 
-_tiktoken_encoder = None
+_tiktoken_encoder: Any = None
+_tiktoken_attempted: bool = False
 
 
-def get_token_encoder():
-    global _tiktoken_encoder
-    if _tiktoken_encoder is None:
+def get_token_encoder() -> Any:
+    global _tiktoken_encoder, _tiktoken_attempted
+    if not _tiktoken_attempted:
+        _tiktoken_attempted = True
         try:
             import tiktoken
             _tiktoken_encoder = tiktoken.get_encoding("cl100k_base")
         except Exception:
-            _tiktoken_encoder = False
+            _tiktoken_encoder = None
     return _tiktoken_encoder
 
 
@@ -44,8 +46,8 @@ def estimate_token_count(text: str) -> int:
     """Exact token counting via tiktoken (cl100k_base) with fast heuristic fallback."""
     if not text:
         return 0
-    enc = get_token_encoder()
-    if enc:
+    enc: Any = get_token_encoder()
+    if enc is not None:
         try:
             return len(enc.encode(text, disallowed_special=()))
         except Exception:
