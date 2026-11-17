@@ -19,8 +19,8 @@ from backend.services.orchestration.llm_service import llm_service
 
 logger = logging.getLogger(__name__)
 
-# Maximum active conversational context before rolling summarization triggers (Decision D28)
-MAX_CONVERSATION_TOKENS = 4000
+# Maximum active conversational context before rolling summarization triggers (Decisions D28 & D37)
+MAX_CONVERSATION_TOKENS = settings.MAX_CONVERSATION_TOKENS
 
 # Keep at least the most recent raw messages intact during compaction
 RAW_PRESERVED_TURNS = 4
@@ -131,19 +131,20 @@ class MemoryService:
         self,
         session: AsyncSession,
         conversation_id: uuid.UUID,
-        limit: int = 20,
+        limit: int = 50,
     ) -> List[ChatMessage]:
         """
-        Retrieves chronological dialogue turns formatted as ChatMessage models.
+        Retrieves the most recent chronological dialogue turns formatted as ChatMessage models.
+        Queries descending to capture the latest messages, then reverses to chronological order.
         """
         stmt = (
             select(Message)
             .where(Message.conversation_id == conversation_id)
-            .order_by(col(Message.created_at).asc())
+            .order_by(col(Message.created_at).desc())
             .limit(limit)
         )
         res = await session.execute(stmt)
-        messages = res.scalars().all()
+        messages = list(reversed(res.scalars().all()))
 
         history: List[ChatMessage] = []
         for m in messages:
