@@ -102,15 +102,38 @@ async def execute_task(
             "records_count": lookup_result.records_count,
         }, []
 
-    # 5. Action Workflow (Placeholder for Phase 4)
+    # 5. Action Workflow (Phase 4.2 HITL ActionDraft Engine)
     elif task.type == PlanTaskType.ACTION_WORKFLOW:
         # Strictly consumes ONLY its declared upstream dependencies
-        context_summary = " ".join(str(v) for v in scoped_upstream_context.values())
-        return {
-            "status": "ACTION_DRAFT_PENDING",
-            "action": task.query,
-            "derived_context": context_summary[:200],
-        }, []
+        context_summary = " ".join(str(v) for v in scoped_upstream_context.values() if v)
+        derived_ctx = context_summary[:200]
+        try:
+            from backend.services.orchestration.action_engine import action_engine
+            from backend.models.action_draft import ActionDraftCreateRequest
+            req = ActionDraftCreateRequest(
+                query=task.query,
+                domain_fields={"derived_context": derived_ctx} if derived_ctx else None,
+            )
+            draft_resp = await action_engine.create_draft(session, user, req)
+            return {
+                "status": "ACTION_DRAFT_PENDING",
+                "action": task.query,
+                "derived_context": derived_ctx,
+                "draft": draft_resp.model_dump(),
+                "draft_id": str(draft_resp.draft_id),
+                "ttl_seconds_remaining": draft_resp.ttl_seconds_remaining,
+                "project_key": draft_resp.project_key,
+                "department": draft_resp.department,
+                "message": f"Prepared official {draft_resp.department} ticket draft for '{draft_resp.title}' (Space: {draft_resp.project_key}, TTL: 15 mins).",
+            }, []
+        except Exception as exc:
+            logger.warning("ActionEngine draft creation rejected or failed: %s", exc)
+            return {
+                "status": "ACTION_REFUSED",
+                "action": task.query,
+                "derived_context": derived_ctx,
+                "message": str(exc),
+            }, []
 
     return None, []
 
@@ -148,7 +171,9 @@ def synthesis_join_node(
 
         elif isinstance(output, dict):
             if output.get("status") == "ACTION_DRAFT_PENDING":
-                response_sections.append(f"**Action Ready for Review:** {output.get('action')}")
+                response_sections.append(output.get("message") or f"**Action Ready for Review:** {output.get('action')}")
+            elif output.get("status") == "ACTION_REFUSED":
+                response_sections.append(f"**Action Notice:** {output.get('message')}")
             else:
                 response_sections.append(output.get("message", ""))
 
@@ -211,11 +236,14 @@ async def orchestrate_dag_execution(
     # Step 5: Synthesis Join Node
     final_text = synthesis_join_node(plan, task_outputs, all_citations)
 
-    # Determine overall confidence
+    # Determine overall confidence and extract action draft if present
     overall_confidence = ConfidenceLevel.HIGH
+    action_draft_payload = None
     for out in task_outputs.values():
         if isinstance(out, SearchResult) and out.confidence == ConfidenceLevel.LOW:
             overall_confidence = ConfidenceLevel.LOW
+        elif isinstance(out, dict) and out.get("status") == "ACTION_DRAFT_PENDING" and out.get("draft"):
+            action_draft_payload = out["draft"]
 
     # Deduplicate citations
     deduped_citations = list(dict.fromkeys(all_citations))
@@ -224,5 +252,6 @@ async def orchestrate_dag_execution(
         plan=plan,
         final_response=final_text,
         citations=deduped_citations,
+        action_draft=action_draft_payload,
         confidence=overall_confidence,
     )

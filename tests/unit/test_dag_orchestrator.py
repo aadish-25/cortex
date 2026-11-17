@@ -1,3 +1,4 @@
+import uuid
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
@@ -127,14 +128,22 @@ async def test_dag_strict_context_isolation():
     """
     client = get_qdrant_client()
     async with async_session() as session:
-        user = User(
-            username="admin",
-            email="admin@cortex.local",
-            hashed_password="x",
-            role=Role.ADMIN,
-            department="Engineering",
-            clearance_level=ClearanceLevel.CONFIDENTIAL,
-        )
+        from sqlmodel import select
+        stmt = select(User).where(User.username == "admin")
+        res = await session.execute(stmt)
+        user = res.scalar_one_or_none()
+        if not user:
+            user = User(
+                username=f"admin_test_{uuid.uuid4().hex[:6]}",
+                email=f"admin_test_{uuid.uuid4().hex[:6]}@cortex.local",
+                hashed_password="x",
+                role=Role.ADMIN,
+                department="Engineering",
+                clearance_level=ClearanceLevel.CONFIDENTIAL,
+            )
+            session.add(user)
+            await session.commit()
+            await session.refresh(user)
 
         task_action = PlanTask(
             id=2,
