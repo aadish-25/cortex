@@ -131,7 +131,7 @@ class JiraService:
     Production Async Jira Service Management (JSM) & Atlassian Cloud REST API v3 Client.
     Features:
       - Token-bucket rate limiting with 429 Retry-After inspection
-      - Automatic department project key routing (KAN, HRSD, FNA)
+      - Automatic department project key routing (ENG, HRSD, FNA)
       - Dynamic issue type discovery & fallback
       - Atlassian Document Format (ADF) description serialization
     """
