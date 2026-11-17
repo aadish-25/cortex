@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Any, Dict, List, Optional, Tuple, Type, TypeVar, cast
 import uuid
 
@@ -12,9 +13,14 @@ from litellm import ModelResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.config import settings
+from backend.core.logging_config import log_llm_interaction, setup_logging
+from backend.core.rate_limiter import rate_limiter
 from backend.services.orchestration.cost_tracker import cost_tracker
 
 logger = logging.getLogger(__name__)
+
+# Ensure logging handlers are active
+setup_logging()
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -151,6 +157,12 @@ class LLMService:
                 if not active_key:
                     break
 
+                key_mask = f"{active_key[:8]}...{active_key[-4:]}" if len(active_key) > 12 else active_key[:6] + "..."
+                start_t = time.perf_counter()
+
+                # Acquire rate-limiter token for this provider before dispatching request
+                await rate_limiter.acquire(provider_name)
+
                 try:
                     raw_response = await litellm.acompletion(
                         model=target_model,
@@ -158,18 +170,21 @@ class LLMService:
                         api_key=active_key,
                         temperature=temperature,
                     )
+                    latency_ms = (time.perf_counter() - start_t) * 1000
                     response = cast(ModelResponse, raw_response)
 
                     # Track token consumption and commercial value
                     usage = getattr(response, "usage", None)
                     p_tok = getattr(usage, "prompt_tokens", 0) or 0
                     c_tok = getattr(usage, "completion_tokens", 0) or 0
+                    cost_calc = cost_tracker.calculate_cost(target_model, p_tok, c_tok, is_free_tier=True)
+
                     try:
                         await cost_tracker.record_usage(
                             provider=provider_name,
                             model=target_model,
                             prompt_tokens=p_tok,
-                            completion_tokens=c_tok,
+                              completion_tokens=c_tok,
                             user_id=user_id,
                             is_free_tier=True,
                             session=session,
@@ -179,15 +194,49 @@ class LLMService:
 
                     choice = response.choices[0]
                     content = getattr(choice.message, "content", "") or ""
+
+                    # Log to dedicated test/general LLM interaction log file
+                    log_llm_interaction(
+                        provider=provider_name,
+                        model=target_model,
+                        user_prompt=prompt,
+                        response_content=content.strip(),
+                        system_prompt=system_prompt,
+                        api_key_masked=key_mask,
+                        prompt_tokens=p_tok,
+                        completion_tokens=c_tok,
+                        latency_ms=latency_ms,
+                        status="SUCCESS (HTTP 200)",
+                        caller="generate_text",
+                        estimated_cost=cost_calc.cost,
+                        transparency_badge=cost_calc.transparency_badge.value,
+                    )
+
                     return content.strip()
                 except Exception as exc:
+                    latency_ms = (time.perf_counter() - start_t) * 1000
                     err_str = str(exc).lower()
                     is_perm = any(code in err_str for code in ["401", "403", "unauthorized", "invalid_api_key"])
+
+                    log_llm_interaction(
+                        provider=provider_name,
+                        model=target_model,
+                        user_prompt=prompt,
+                        response_content=f"Error: {exc}",
+                        system_prompt=system_prompt,
+                        api_key_masked=key_mask,
+                        latency_ms=latency_ms,
+                        status=f"FAILED ({type(exc).__name__})",
+                        caller="generate_text",
+                    )
                     logger.warning(
                         "[%s] Key failed (%s). Attempting key rotation.",
                         provider_name,
                         "Permanent Auth Error" if is_perm else "Rate Limit / Provider Error",
                     )
+                    if "429" in err_str or "rate limit" in err_str or "rate_limit" in err_str:
+                        headers = getattr(exc, "headers", None)
+                        await rate_limiter.handle_upstream_rate_limit(provider_name, headers=headers)
                     pool.rotate_key(failed_key=active_key, is_permanent=is_perm)
 
             logger.warning("[%s] All keys in pool exhausted. Cascading to next provider.", provider_name)
@@ -239,6 +288,12 @@ class LLMService:
                 if not active_key:
                     break
 
+                key_mask = f"{active_key[:8]}...{active_key[-4:]}" if len(active_key) > 12 else active_key[:6] + "..."
+                start_t = time.perf_counter()
+
+                # Acquire rate-limiter token for this provider before dispatching structured request
+                await rate_limiter.acquire(provider_name)
+
                 try:
                     raw_response = await litellm.acompletion(
                         model=target_model,
@@ -247,12 +302,15 @@ class LLMService:
                         response_format=response_model,
                         temperature=temperature,
                     )
+                    latency_ms = (time.perf_counter() - start_t) * 1000
                     response = cast(ModelResponse, raw_response)
 
                     # Track token consumption and commercial value
                     usage = getattr(response, "usage", None)
                     p_tok = getattr(usage, "prompt_tokens", 0) or 0
                     c_tok = getattr(usage, "completion_tokens", 0) or 0
+                    cost_calc = cost_tracker.calculate_cost(target_model, p_tok, c_tok, is_free_tier=True)
+
                     try:
                         await cost_tracker.record_usage(
                             provider=provider_name,
@@ -272,15 +330,50 @@ class LLMService:
                     if raw_content.startswith("```"):
                         raw_content = re.sub(r"^```(?:json)?\n|\n```$", "", raw_content.strip())
 
-                    return response_model.model_validate_json(raw_content)
+                    parsed = response_model.model_validate_json(raw_content)
+
+                    # Log to dedicated test/general LLM interaction log file
+                    log_llm_interaction(
+                        provider=provider_name,
+                        model=target_model,
+                        user_prompt=prompt,
+                        response_content=parsed,
+                        system_prompt=system_prompt,
+                        api_key_masked=key_mask,
+                        prompt_tokens=p_tok,
+                        completion_tokens=c_tok,
+                        latency_ms=latency_ms,
+                        status="SUCCESS (HTTP 200)",
+                        caller=f"generate_structured<{response_model.__name__}>",
+                        estimated_cost=cost_calc.cost,
+                        transparency_badge=cost_calc.transparency_badge.value,
+                    )
+
+                    return parsed
                 except Exception as exc:
+                    latency_ms = (time.perf_counter() - start_t) * 1000
                     err_str = str(exc).lower()
                     is_perm = any(code in err_str for code in ["401", "403", "unauthorized", "invalid_api_key"])
+
+                    log_llm_interaction(
+                        provider=provider_name,
+                        model=target_model,
+                        user_prompt=prompt,
+                        response_content=f"Error: {exc}",
+                        system_prompt=system_prompt,
+                        api_key_masked=key_mask,
+                        latency_ms=latency_ms,
+                        status=f"FAILED ({type(exc).__name__})",
+                        caller=f"generate_structured<{response_model.__name__}>",
+                    )
                     logger.warning(
                         "[%s] Structured generation failed with key (%s). Rotating key.",
                         provider_name,
                         "Permanent Auth Error" if is_perm else "Error/RateLimit",
                     )
+                    if "429" in err_str or "rate limit" in err_str or "rate_limit" in err_str:
+                        headers = getattr(exc, "headers", None)
+                        await rate_limiter.handle_upstream_rate_limit(provider_name, headers=headers)
                     pool.rotate_key(failed_key=active_key, is_permanent=is_perm)
 
             logger.warning("[%s] All structured attempts exhausted. Cascading to next provider.", provider_name)
