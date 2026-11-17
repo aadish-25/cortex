@@ -4,12 +4,15 @@ import logging
 import os
 import re
 from typing import Any, Dict, List, Optional, Tuple, Type, TypeVar, cast
+import uuid
 
 from pydantic import BaseModel
 import litellm
 from litellm import ModelResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.config import settings
+from backend.services.orchestration.cost_tracker import cost_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -110,10 +113,13 @@ class LLMService:
         system_prompt: Optional[str] = None,
         model: Optional[str] = None,
         temperature: float = 0.2,
+        user_id: Optional[uuid.UUID] = None,
+        session: Optional[AsyncSession] = None,
     ) -> str:
         """
         Executes text generation cascading through Groq -> OpenRouter -> Gemini.
         Rotates keys on rate limit (429) and fails over seamlessly.
+        Tracks token consumption and equivalent commercial cost.
         """
         if not self.is_configured():
             logger.warning("No LLM API keys configured. LLM text generation unavailable.")
@@ -146,6 +152,24 @@ class LLMService:
                         temperature=temperature,
                     )
                     response = cast(ModelResponse, raw_response)
+
+                    # Track token consumption and commercial value
+                    usage = getattr(response, "usage", None)
+                    p_tok = getattr(usage, "prompt_tokens", 0) or 0
+                    c_tok = getattr(usage, "completion_tokens", 0) or 0
+                    try:
+                        await cost_tracker.record_usage(
+                            provider=provider_name,
+                            model=target_model,
+                            prompt_tokens=p_tok,
+                            completion_tokens=c_tok,
+                            user_id=user_id,
+                            is_free_tier=True,
+                            session=session,
+                        )
+                    except Exception as cost_err:
+                        logger.warning("Failed to record token usage metrics: %s", cost_err)
+
                     choice = response.choices[0]
                     content = getattr(choice.message, "content", "") or ""
                     return content.strip()
@@ -170,10 +194,13 @@ class LLMService:
         system_prompt: Optional[str] = None,
         model: Optional[str] = None,
         temperature: float = 0.0,
+        user_id: Optional[uuid.UUID] = None,
+        session: Optional[AsyncSession] = None,
     ) -> Optional[T]:
         """
         Executes schema-constrained structured output cascading through Groq -> OpenRouter -> Gemini.
         Guarantees that the returned object is a strictly validated instance of response_model.
+        Tracks token consumption and equivalent commercial cost.
         """
         if not self.is_configured():
             logger.warning("No LLM API keys configured. Structured generation unavailable.")
@@ -207,6 +234,24 @@ class LLMService:
                         temperature=temperature,
                     )
                     response = cast(ModelResponse, raw_response)
+
+                    # Track token consumption and commercial value
+                    usage = getattr(response, "usage", None)
+                    p_tok = getattr(usage, "prompt_tokens", 0) or 0
+                    c_tok = getattr(usage, "completion_tokens", 0) or 0
+                    try:
+                        await cost_tracker.record_usage(
+                            provider=provider_name,
+                            model=target_model,
+                            prompt_tokens=p_tok,
+                            completion_tokens=c_tok,
+                            user_id=user_id,
+                            is_free_tier=True,
+                            session=session,
+                        )
+                    except Exception as cost_err:
+                        logger.warning("Failed to record structured token usage metrics: %s", cost_err)
+
                     choice = response.choices[0]
                     raw_content = getattr(choice.message, "content", "") or "{}"
 

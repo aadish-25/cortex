@@ -13,6 +13,7 @@ from backend.models.chat import Conversation, Message, MessageFeedback
 from backend.models.action_draft import ActionDraft
 from backend.models.ticket import Ticket
 from backend.models.audit import AuditLog
+from backend.models.token_usage import TokenUsageLog
 
 __all__ = [
     "Role",
@@ -34,4 +35,5 @@ __all__ = [
     "ActionDraft",
     "Ticket",
     "AuditLog",
+    "TokenUsageLog",
 ]
