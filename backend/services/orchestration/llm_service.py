@@ -136,7 +136,14 @@ class LLMService:
             if not pool.has_keys():
                 continue
 
-            target_model = model or default_model
+            # Ensure provider-specific models fallback to default_model when cascading to a different provider
+            if model and model.startswith(f"{provider_name}/"):
+                target_model = model
+            elif model and any(model.startswith(f"{p}/") for p in ["groq", "openrouter", "gemini"]):
+                target_model = default_model
+            else:
+                target_model = model or default_model
+
             max_attempts = len(pool.valid_keys)
 
             for _ in range(max_attempts):
@@ -217,7 +224,14 @@ class LLMService:
             if not pool.has_keys():
                 continue
 
-            target_model = model or default_model
+            # Ensure provider-specific models fallback to default_model when cascading to a different provider
+            if model and model.startswith(f"{provider_name}/"):
+                target_model = model
+            elif model and any(model.startswith(f"{p}/") for p in ["groq", "openrouter", "gemini"]):
+                target_model = default_model
+            else:
+                target_model = model or default_model
+
             max_attempts = len(pool.valid_keys)
 
             for _ in range(max_attempts):
