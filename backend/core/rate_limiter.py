@@ -14,20 +14,103 @@ logger = logging.getLogger(__name__)
 class ProviderRateConfig:
     """Configures rate-limiting parameters for a given provider or API tier."""
 
-    def __init__(self, requests_per_minute: int, burst_capacity: int) -> None:
+    def __init__(self, requests_per_minute: int, burst_capacity: int, fallback_retry_delay: float = 5.0) -> None:
         self.rpm = requests_per_minute
         self.burst_capacity = burst_capacity
+        self.fallback_retry_delay = fallback_retry_delay
         # Tokens added per second
         self.refill_rate = requests_per_minute / 60.0
 
 
-# Default rate limits per upstream provider (aligned with free preview / standard tiers)
+# ==============================================================================
+# Extensible Multi-Provider Rate Limiter Registry (PRD Section 9.3, Decision D27)
+# Integrating any new MCP server or external API requires only adding a
+# dictionary block to RATE_LIMIT_CONFIGS without modifying limiter internals.
+# ==============================================================================
+RATE_LIMIT_CONFIGS: Dict[str, Dict[str, Any]] = {
+    "github": {
+        "max_calls": 60,
+        "period_seconds": 60,
+        "fallback_retry_delay": 5,
+        "burst_capacity": 10,
+    },
+    "google_drive": {
+        "max_calls": 100,
+        "period_seconds": 60,
+        "fallback_retry_delay": 3,
+        "burst_capacity": 15,
+    },
+    "web_search": {
+        "max_calls": 20,
+        "period_seconds": 60,
+        "fallback_retry_delay": 10,
+        "burst_capacity": 4,
+    },
+    "atlassian_jsm": {
+        "max_calls": 50,
+        "period_seconds": 60,
+        "fallback_retry_delay": 5,
+        "burst_capacity": 10,
+    },
+    "jira": {
+        "max_calls": 60,
+        "period_seconds": 60,
+        "fallback_retry_delay": 5,
+        "burst_capacity": 10,
+    },
+    "groq": {
+        "max_calls": 30,
+        "period_seconds": 60,
+        "fallback_retry_delay": 3,
+        "burst_capacity": 5,
+    },
+    "openrouter": {
+        "max_calls": 20,
+        "period_seconds": 60,
+        "fallback_retry_delay": 4,
+        "burst_capacity": 4,
+    },
+    "gemini": {
+        "max_calls": 15,
+        "period_seconds": 60,
+        "fallback_retry_delay": 5,
+        "burst_capacity": 3,
+    },
+    "default": {
+        "max_calls": 20,
+        "period_seconds": 60,
+        "fallback_retry_delay": 5,
+        "burst_capacity": 3,
+    },
+}
+
+# Standard graceful degradation messages for SSE pipeline (PRD Section 9.3)
+DEGRADATION_MESSAGES: Dict[str, str] = {
+    "github": "Live code search is temporarily at rate limit. Continuing with internal policy documentation.",
+    "google_drive": "Shared Drive search is temporarily at rate limit. Continuing with internal policy documentation.",
+    "web_search": "External web search is temporarily at rate limit. Continuing with internal policy documentation.",
+    "atlassian_jsm": "Ticketing service is temporarily at rate limit. Please retry in a few moments.",
+    "jira": "Ticketing service is temporarily at rate limit. Please retry in a few moments.",
+}
+
+
+def get_degradation_message(provider: str) -> str:
+    """Returns standardized, polite degradation string for rate-limited providers."""
+    key = provider.lower()
+    return DEGRADATION_MESSAGES.get(
+        key,
+        f"{key.replace('_', ' ').title()} is temporarily at rate limit. Continuing with verified internal documentation.",
+    )
+
+
+# Backwards compatibility map for direct ProviderRateConfig lookups
 DEFAULT_PROVIDER_LIMITS: Dict[str, ProviderRateConfig] = {
-    "groq": ProviderRateConfig(requests_per_minute=30, burst_capacity=5),
-    "openrouter": ProviderRateConfig(requests_per_minute=20, burst_capacity=4),
-    "gemini": ProviderRateConfig(requests_per_minute=15, burst_capacity=3),
-    "jira": ProviderRateConfig(requests_per_minute=60, burst_capacity=10),
-    "default": ProviderRateConfig(requests_per_minute=20, burst_capacity=3),
+    p: ProviderRateConfig(
+        requests_per_minute=cfg["max_calls"],
+        burst_capacity=cfg.get("burst_capacity", max(1, cfg["max_calls"] // 6)),
+        fallback_retry_delay=cfg.get("fallback_retry_delay", 5.0),
+    )
+    for p, cfg in RATE_LIMIT_CONFIGS.items()
 }
 
 
@@ -73,7 +156,44 @@ class RateLimiter:
 
     def _get_config(self, provider: str) -> ProviderRateConfig:
         key = provider.lower()
+        if key in RATE_LIMIT_CONFIGS:
+            cfg = RATE_LIMIT_CONFIGS[key]
+            return ProviderRateConfig(
+                requests_per_minute=cfg.get("max_calls", 20),
+                burst_capacity=cfg.get("burst_capacity", max(1, cfg.get("max_calls", 20) // 6)),
+                fallback_retry_delay=cfg.get("fallback_retry_delay", 5.0),
+            )
         return DEFAULT_PROVIDER_LIMITS.get(key, DEFAULT_PROVIDER_LIMITS["default"])
+
+    async def is_rate_limited(self, provider: str) -> bool:
+        """
+        Non-blocking probe checking if provider is currently in penalty cooldown or depleted.
+        Returns True if calls to provider will be throttled.
+        """
+        provider_key = provider.lower()
+        now = time.time()
+        redis = await self._get_redis()
+        if redis is not None:
+            try:
+                penalty_key = f"cortex:ratelimit:penalty:{provider_key}"
+                penalty_until = await redis.get(penalty_key)
+                if penalty_until and float(penalty_until) > now:
+                    return True
+                bucket_key = f"cortex:ratelimit:bucket:{provider_key}"
+                data = await redis.hgetall(bucket_key)
+                if data:
+                    tokens = float(data.get("tokens", 1.0))
+                    return tokens < 1.0
+            except Exception:
+                pass
+
+        async with self._lock:
+            bucket = self._memory_buckets.get(provider_key)
+            if bucket:
+                if now < bucket.get("penalty_until", 0.0):
+                    return True
+                return bucket.get("tokens", 1.0) < 1.0
+        return False
 
     async def acquire(self, provider: str, cost: int = 1, timeout: float = 15.0) -> bool:
         """

@@ -4,7 +4,13 @@ import pytest
 import redis.asyncio as aioredis
 
 from backend.core.config import settings
-from backend.core.rate_limiter import RateLimiter, ProviderRateConfig, DEFAULT_PROVIDER_LIMITS
+from backend.core.rate_limiter import (
+    DEFAULT_PROVIDER_LIMITS,
+    RATE_LIMIT_CONFIGS,
+    ProviderRateConfig,
+    RateLimiter,
+    get_degradation_message,
+)
 
 
 @pytest.mark.asyncio
@@ -99,3 +105,56 @@ async def test_redis_token_bucket_live_docker():
 
         # Clean up test keys
         await redis_client.delete(f"cortex:ratelimit:bucket:{provider}")
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_configs_and_dynamic_registration():
+    """Verifies PRD 9.3 RATE_LIMIT_CONFIGS entries and dynamic provider extensibility."""
+    assert "github" in RATE_LIMIT_CONFIGS
+    assert RATE_LIMIT_CONFIGS["github"]["max_calls"] == 60
+
+    assert "google_drive" in RATE_LIMIT_CONFIGS
+    assert RATE_LIMIT_CONFIGS["google_drive"]["max_calls"] == 100
+
+    assert "web_search" in RATE_LIMIT_CONFIGS
+    assert RATE_LIMIT_CONFIGS["web_search"]["max_calls"] == 20
+
+    assert "atlassian_jsm" in RATE_LIMIT_CONFIGS
+    assert RATE_LIMIT_CONFIGS["atlassian_jsm"]["max_calls"] == 50
+
+    limiter = RateLimiter(redis_url="redis://localhost:9999/0")
+
+    # Dynamic registration: add a new custom provider dictionary without touching internals
+    RATE_LIMIT_CONFIGS["slack_mcp"] = {
+        "max_calls": 45,
+        "period_seconds": 60,
+        "fallback_retry_delay": 2,
+        "burst_capacity": 8,
+    }
+
+    slack_cfg = limiter._get_config("slack_mcp")
+    assert slack_cfg.rpm == 45
+    assert slack_cfg.burst_capacity == 8
+    assert slack_cfg.fallback_retry_delay == 2.0
+
+
+@pytest.mark.asyncio
+async def test_degradation_messages_and_is_rate_limited_probe():
+    """Verifies polite SSE degradation messages and non-blocking rate limit probe."""
+    msg_github = get_degradation_message("github")
+    assert "Live code search is temporarily at rate limit" in msg_github
+
+    msg_drive = get_degradation_message("google_drive")
+    assert "Shared Drive search is temporarily at rate limit" in msg_drive
+
+    msg_unknown = get_degradation_message("notion_mcp")
+    assert "Notion Mcp is temporarily at rate limit" in msg_unknown
+
+    # Probe on fresh provider
+    limiter = RateLimiter(redis_url="redis://localhost:9999/0")
+    is_limited = await limiter.is_rate_limited("custom_service")
+    assert is_limited is False
+
+    # Apply penalty and verify probe reports True
+    await limiter.handle_upstream_rate_limit("custom_service", retry_after_hint=5.0)
+    assert await limiter.is_rate_limited("custom_service") is True
