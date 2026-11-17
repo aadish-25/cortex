@@ -13,10 +13,10 @@ logger = logging.getLogger(__name__)
 
 # Default department to Jira Project Key routing
 DEPARTMENT_PROJECT_MAP: Dict[str, str] = {
-    "engineering": "KAN",
-    "eng": "KAN",
-    "it": "KAN",
-    "information technology": "KAN",
+    "engineering": "ENG",
+    "eng": "ENG",
+    "it": "ENG",
+    "information technology": "ENG",
     "hr": "HRSD",
     "human resources": "HRSD",
     "people": "HRSD",
@@ -167,9 +167,9 @@ class JiraService:
     def resolve_project_key(self, department: Optional[str]) -> str:
         """Resolves target Jira project key from department name."""
         if not department:
-            return settings.JIRA_DEFAULT_PROJECT_KEY or "KAN"
+            return settings.JIRA_DEFAULT_PROJECT_KEY or "ENG"
         dept_norm = department.strip().lower()
-        return DEPARTMENT_PROJECT_MAP.get(dept_norm, settings.JIRA_DEFAULT_PROJECT_KEY or "KAN")
+        return DEPARTMENT_PROJECT_MAP.get(dept_norm, settings.JIRA_DEFAULT_PROJECT_KEY or "ENG")
 
     def resolve_issue_type(self, taxonomy: TicketTaxonomy, available_types: Optional[List[str]] = None) -> str:
         """

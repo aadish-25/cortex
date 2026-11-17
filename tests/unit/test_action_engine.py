@@ -101,14 +101,14 @@ async def test_users():
 
 def test_jira_service_department_mapping():
     """Verifies department string resolves to correct project key."""
-    assert jira_service.resolve_project_key("Engineering") == "KAN"
-    assert jira_service.resolve_project_key("it") == "KAN"
+    assert jira_service.resolve_project_key("Engineering") == "ENG"
+    assert jira_service.resolve_project_key("it") == "ENG"
     assert jira_service.resolve_project_key("HR") == "HRSD"
     assert jira_service.resolve_project_key("Human Resources") == "HRSD"
     assert jira_service.resolve_project_key("Finance") == "FNA"
     assert jira_service.resolve_project_key("billing") == "FNA"
     # Fallback default
-    assert jira_service.resolve_project_key("UnknownDept") in ["KAN", "ITSD"]
+    assert jira_service.resolve_project_key("UnknownDept") in ["ENG", "ITSD"]
 
 
 def test_jira_service_issue_type_resolution():
@@ -205,7 +205,7 @@ async def test_create_action_draft_and_ttl(test_users):
         assert resp.draft_id is not None
         assert resp.user_id == user.id
         assert resp.department == "Engineering"
-        assert resp.project_key == "KAN"
+        assert resp.project_key == "ENG"
         assert resp.taxonomy_tier == TicketTaxonomy.SERVICE_REQUEST
         assert resp.status == ActionDraftStatus.PENDING
         assert resp.is_committed is False

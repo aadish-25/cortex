@@ -40,7 +40,7 @@ class ActionDraft(SQLModel, table=True):
         except Exception:
             return ActionDraftPayload(
                 department="General",
-                project_key="KAN",
+                project_key="ENG",
                 title=self.action_type,
                 description="",
             )
