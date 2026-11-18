@@ -349,6 +349,9 @@ export function ChatPage() {
   }, [])
 
   useEffect(() => {
+    if (isStreaming || (conversationId && messages.length > 0 && messages[0].conversation_id === conversationId)) {
+      return
+    }
     abortRef.current?.abort()
     setIsStreaming(false)
     setInput('')

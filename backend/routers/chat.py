@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from qdrant_client import QdrantClient
 from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import col, select
+from sqlmodel import col, delete, select
 
 from backend.core.config import settings
 from backend.core.security import get_current_user
@@ -66,6 +66,10 @@ class ConversationRead(BaseModel):
     summary: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+
+
+class ConversationUpdate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
 
 
 class MessageRead(BaseModel):
@@ -175,6 +179,50 @@ async def list_user_conversations(
     )
 
 
+@router.patch("/conversations/{conversation_id}", response_model=ConversationRead)
+async def update_conversation(
+    conversation_id: uuid.UUID,
+    payload: ConversationUpdate,
+    db_session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    stmt = select(Conversation).where(
+        (Conversation.id == conversation_id) & (Conversation.user_id == current_user.id)
+    )
+    res = await db_session.execute(stmt)
+    conv = res.scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found or access denied")
+    conv.title = payload.title.strip()
+    conv.updated_at = datetime.now(timezone.utc)
+    db_session.add(conv)
+    await db_session.commit()
+    await db_session.refresh(conv)
+    return ConversationRead.model_validate(conv)
+
+
+@router.delete("/conversations/{conversation_id}")
+async def delete_conversation(
+    conversation_id: uuid.UUID,
+    db_session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    stmt = select(Conversation).where(
+        (Conversation.id == conversation_id) & (Conversation.user_id == current_user.id)
+    )
+    res = await db_session.execute(stmt)
+    conv = res.scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found or access denied")
+    msg_ids = (await db_session.execute(select(Message.id).where(Message.conversation_id == conversation_id))).scalars().all()
+    if msg_ids:
+        await db_session.execute(delete(MessageFeedback).where(MessageFeedback.message_id.in_(msg_ids)))
+        await db_session.execute(delete(Message).where(Message.conversation_id == conversation_id))
+    await db_session.delete(conv)
+    await db_session.commit()
+    return {"status": "success", "message": "Conversation deleted successfully"}
+
+
 @router.get("/conversations/{conversation_id}/messages", response_model=PaginatedResponse[MessageRead])
 async def get_conversation_messages(
     conversation_id: uuid.UUID,
@@ -230,6 +278,7 @@ async def get_conversation_messages(
         total=total,
         total_pages=(total + page_size - 1) // page_size,
     )
+
 
 @router.post("/messages/{assistant_message_id}/regenerate")
 async def regenerate_assistant_message(

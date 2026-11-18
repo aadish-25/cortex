@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, NavLink } from 'react-router-dom'
-import { Activity, ChevronDown, FileText, LayoutDashboard, MessageSquare, Plus, Search, ShieldCheck, Users, X } from 'lucide-react'
+import { Activity, ChevronDown, FileText, LayoutDashboard, MessageSquare, Pencil, Plus, Search, ShieldCheck, Trash2, Users, X } from 'lucide-react'
 import { api } from '../api/client'
 import type { Conversation, Page } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
@@ -15,6 +15,10 @@ export function Sidebar({ mobileOpen, onNavigate }: { mobileOpen: boolean; onNav
   const [page, setPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
   const [search, setSearch] = useState('')
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editTitle, setEditTitle] = useState('')
+  const [deleteTarget, setDeleteTarget] = useState<Conversation | null>(null)
+  const [isDeleting, setIsDeleting] = useState(false)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   async function loadConversations(nextPage = 1, term = search) {
@@ -25,6 +29,34 @@ export function Sidebar({ mobileOpen, onNavigate }: { mobileOpen: boolean; onNav
       setConversations((current) => nextPage === 1 ? result.items : [...current, ...result.items])
       setPage(result.page); setTotalPages(result.total_pages)
     } catch { /* The chat view remains usable if history is temporarily unavailable. */ }
+  }
+
+  async function saveRename(id: string) {
+    if (!editTitle.trim()) { setEditingId(null); return }
+    try {
+      await api(`/api/v1/chat/conversations/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ title: editTitle.trim() }),
+      })
+      setConversations((prev) => prev.map((c) => c.id === id ? { ...c, title: editTitle.trim() } : c))
+    } catch { /* toast or error */ }
+    finally { setEditingId(null) }
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return
+    setIsDeleting(true)
+    try {
+      await api(`/api/v1/chat/conversations/${deleteTarget.id}`, { method: 'DELETE' })
+      setConversations((prev) => prev.filter((c) => c.id !== deleteTarget.id))
+      if (location.pathname === `/chat/${deleteTarget.id}`) {
+        navigate('/chat')
+      }
+    } catch { /* error */ }
+    finally {
+      setIsDeleting(false)
+      setDeleteTarget(null)
+    }
   }
 
   useEffect(() => { void loadConversations(1, '') }, [])
@@ -87,10 +119,71 @@ export function Sidebar({ mobileOpen, onNavigate }: { mobileOpen: boolean; onNav
       <div className="sidebar-history-heading"><p className="sidebar-section-label">{isAdminArea ? 'RECENT CONVERSATIONS' : 'YOUR CONVERSATIONS'}</p><button className="subtle-icon" onClick={() => void loadConversations(1)} aria-label="Refresh conversations"><ChevronDown size={15} /></button></div>
       <div className="conversation-list">
         {conversations.length === 0 && <p className="sidebar-empty">Your conversations will appear here.</p>}
-        {conversations.map((conversation) => <button key={conversation.id} className={`conversation-link ${location.pathname === `/chat/${conversation.id}` ? 'active' : ''}`} onClick={() => { navigate(`/chat/${conversation.id}`); onNavigate() }}><MessageSquare size={14} /><span>{conversation.title || 'New conversation'}</span></button>)}
+        {conversations.map((conversation) => (
+          <div key={conversation.id} className={`conversation-item ${location.pathname === `/chat/${conversation.id}` ? 'active' : ''}`}>
+            {editingId === conversation.id ? (
+              <input
+                className="conversation-rename-input"
+                value={editTitle}
+                onChange={(e) => setEditTitle(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void saveRename(conversation.id)
+                  if (e.key === 'Escape') setEditingId(null)
+                }}
+                onBlur={() => void saveRename(conversation.id)}
+                autoFocus
+                onClick={(e) => e.stopPropagation()}
+              />
+            ) : (
+              <button
+                className="conversation-link"
+                onClick={() => { navigate(`/chat/${conversation.id}`); onNavigate() }}
+              >
+                <MessageSquare size={14} className="conversation-icon" />
+                <span className="conversation-title">{conversation.title || 'New conversation'}</span>
+              </button>
+            )}
+            <div className="conversation-actions">
+              <button
+                className="conversation-action-btn"
+                title="Rename"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setEditingId(conversation.id)
+                  setEditTitle(conversation.title || 'New conversation')
+                }}
+              >
+                <Pencil size={12} />
+              </button>
+              <button
+                className="conversation-action-btn delete"
+                title="Delete"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setDeleteTarget(conversation)
+                }}
+              >
+                <Trash2 size={12} />
+              </button>
+            </div>
+          </div>
+        ))}
         {page < totalPages && <button className="load-more-conversations" onClick={() => void loadConversations(page + 1)}>Load older conversations</button>}
       </div>
     </div>
+
+    {deleteTarget && (
+      <div className="modal-overlay" onClick={() => setDeleteTarget(null)}>
+        <div className="modal-card confirm-modal" onClick={(e) => e.stopPropagation()}>
+          <h3>Delete conversation?</h3>
+          <p>This will permanently delete "<strong>{deleteTarget.title || 'New conversation'}</strong>" and its message history. This action cannot be undone.</p>
+          <div className="modal-actions">
+            <button type="button" className="secondary-button" onClick={() => setDeleteTarget(null)}>Cancel</button>
+            <button type="button" className="danger-button" disabled={isDeleting} onClick={() => void confirmDelete()}>{isDeleting ? 'Deleting…' : 'Delete'}</button>
+          </div>
+        </div>
+      </div>
+    )}
 
     <div className="sidebar-user-anchor"><UserMenu /></div>
   </aside>

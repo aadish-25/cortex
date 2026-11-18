@@ -137,11 +137,27 @@ h1, h2, h3 { font-family: 'Manrope', 'DM Sans', sans-serif; letter-spacing: -.03
 .sidebar-history-heading { display: flex; align-items: center; justify-content: space-between; padding: 0 9px 8px; }
 .subtle-icon { display: inline-flex; width: 23px; height: 23px; align-items: center; justify-content: center; color: var(--muted-2); background: transparent; border: 0; border-radius: 5px; }
 .subtle-icon:hover { color: var(--text); background: var(--surface-hover); }
-.conversation-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 1px; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
-.conversation-link { display: flex; align-items: center; gap: 9px; width: 100%; height: 34px; padding: 0 9px; overflow: hidden; color: var(--muted); background: transparent; border: 0; border-radius: 7px; font-size: 11px; text-align: left; }
-.conversation-link span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.conversation-link:hover, .conversation-link.active { color: var(--text); background: var(--surface-hover); }
-.conversation-link.active { color: var(--primary); }
+.conversation-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 1px; display: flex; flex-direction: column; gap: 2px; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+.conversation-item { position: relative; display: flex; align-items: center; width: 100%; border-radius: 7px; flex-shrink: 0; min-height: 38px; }
+.conversation-item:hover, .conversation-item.active { background: var(--surface-hover); }
+.conversation-item.active .conversation-title { color: var(--primary); font-weight: 600; }
+.conversation-link { display: flex; align-items: center; gap: 9px; width: 100%; height: 38px; padding: 0 9px; overflow: hidden; color: var(--muted); background: transparent; border: 0; font-size: 11px; text-align: left; cursor: pointer; flex: 1; min-width: 0; }
+.conversation-link:hover { color: var(--text); }
+.conversation-icon { flex-shrink: 0; }
+.conversation-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.conversation-rename-input { flex: 1; height: 30px; margin: 0 6px; padding: 0 8px; font-size: 11px; border-radius: 5px; border: 1px solid var(--primary); background: var(--surface); color: var(--text); outline: none; }
+.conversation-actions { display: none; align-items: center; gap: 2px; padding-right: 6px; flex-shrink: 0; }
+.conversation-item:hover .conversation-actions { display: flex; }
+.conversation-action-btn { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; background: transparent; border: 0; border-radius: 4px; color: var(--muted); cursor: pointer; }
+.conversation-action-btn:hover { color: var(--text); background: var(--surface-soft); }
+.conversation-action-btn.delete:hover { color: var(--danger, #ef4444); background: rgba(239, 68, 68, 0.1); }
+.confirm-modal { max-width: 380px; padding: 22px; }
+.confirm-modal h3 { margin: 0 0 8px; font-size: 15px; font-weight: 700; color: var(--text); }
+.confirm-modal p { margin: 0 0 18px; font-size: 12px; line-height: 1.5; color: var(--muted); }
+.confirm-modal .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.danger-button { padding: 8px 14px; font-size: 12px; font-weight: 600; border-radius: 7px; border: 0; background: #ef4444; color: #fff; cursor: pointer; transition: background 0.15s ease; }
+.danger-button:hover { background: #dc2626; }
+.danger-button:disabled { opacity: 0.5; cursor: not-allowed; }
 .sidebar-empty { padding: 9px; color: var(--muted-2); font-size: 10px; line-height: 1.5; }
 .load-more-conversations { width: 100%; padding: 9px; color: var(--muted); background: transparent; border: 0; font-size: 10px; text-align: left; }
 .load-more-conversations:hover { color: var(--primary); }
