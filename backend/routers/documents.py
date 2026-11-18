@@ -163,6 +163,7 @@ async def list_documents(
     department: Optional[str] = None,
     search: Optional[str] = Query(default=None, max_length=160),
     status_filter: Optional[DocumentStatus] = Query(default=None, alias="status"),
+    clearance_level: Optional[ClearanceLevel] = Query(default=None, alias="clearance_level"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=100),
     current_user: User = Depends(get_current_user),
@@ -175,6 +176,7 @@ async def list_documents(
         department=department,
         search=search,
         status_filter=status_filter,
+        clearance_filter=clearance_level,
         page=page,
         page_size=page_size,
     )

@@ -11,6 +11,7 @@ export function AdminDocuments() {
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState('')
   const [department, setDepartment] = useState('')
+  const [clearance, setClearance] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [toast, setToast] = useState('')
@@ -28,16 +29,18 @@ export function AdminDocuments() {
   const replaceInput = useRef<HTMLInputElement>(null)
   const replaceTarget = useRef<DocumentRecord | null>(null)
 
-  const load = async (nextPage = page, options?: { search?: string; status?: string; department?: string }) => {
+  const load = async (nextPage = page, options?: { search?: string; status?: string; department?: string; clearance?: string }) => {
     setLoading(true); setError('')
     const searchTerm = options?.search ?? search
     const statusFilter = options?.status ?? status
     const deptFilter = options?.department ?? department
+    const clearanceFilter = options?.clearance ?? clearance
     try {
       const params = new URLSearchParams({ page: String(nextPage), page_size: '20' })
       if (searchTerm.trim()) params.set('search', searchTerm.trim())
       if (statusFilter) params.set('status', statusFilter)
       if (deptFilter) params.set('department', deptFilter)
+      if (clearanceFilter) params.set('clearance_level', clearanceFilter)
       const data = await api<Page<DocumentRecord>>(`/api/v1/documents/?${params}`)
       setResult(data); setPage(data.page)
     } catch (err) { setError(err instanceof Error ? err.message : 'Could not load documents.') }
@@ -99,7 +102,7 @@ export function AdminDocuments() {
   return <div className="admin-page">
     <header className="page-header"><div><p className="eyebrow">KNOWLEDGE BASE</p><h1>Documents</h1><p className="page-subtitle">Manage source files, indexing state and active versions.</p></div><button className="primary-button" onClick={() => setUploadOpen(true)}><Plus size={17} /> Add document</button></header>
     <section className="panel data-panel">
-      <div className="table-toolbar"><div className="search-field"><Search size={16} /><input placeholder="Search title or filename" value={search} onChange={(e) => { const v = e.target.value; setSearch(v); if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current); searchDebounceRef.current = setTimeout(() => void load(1, { search: v }), 350) }} /></div><div className="toolbar-filters"><select value={department} onChange={(e) => { const value = e.target.value; setDepartment(value); setPage(1); void load(1, { department: value }) }}><option value="">All departments</option><option value="Engineering">Engineering</option><option value="HR">HR</option><option value="Finance">Finance</option><option value="Enterprise">Enterprise</option></select><select value={status} onChange={(e) => { const value = e.target.value; setStatus(value); setPage(1); void load(1, { status: value }) }}><option value="">All statuses</option><option value="ACTIVE">Active</option><option value="UPDATING">Updating</option><option value="UPDATE_FAILED">Update failed</option></select><span className="count-label">{result?.total ?? 0} documents</span></div></div>
+      <div className="table-toolbar"><div className="search-field"><Search size={16} /><input placeholder="Search title or filename" value={search} onChange={(e) => { const v = e.target.value; setSearch(v); if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current); searchDebounceRef.current = setTimeout(() => void load(1, { search: v }), 350) }} /></div><div className="toolbar-filters"><select value={department} onChange={(e) => { const value = e.target.value; setDepartment(value); setPage(1); void load(1, { department: value }) }}><option value="">All departments</option><option value="Engineering">Engineering</option><option value="HR">HR</option><option value="Finance">Finance</option><option value="Enterprise">Enterprise</option></select><select value={clearance} onChange={(e) => { const value = e.target.value; setClearance(value); setPage(1); void load(1, { clearance: value }) }}><option value="">All clearances</option><option value="Public">Public</option><option value="Internal">Internal</option><option value="Confidential">Confidential</option></select><select value={status} onChange={(e) => { const value = e.target.value; setStatus(value); setPage(1); void load(1, { status: value }) }}><option value="">All statuses</option><option value="ACTIVE">Active</option><option value="UPDATING">Updating</option><option value="UPDATE_FAILED">Update failed</option></select><span className="count-label">{result?.total ?? 0} documents</span></div></div>
       {error && <div className="inline-error table-error">{error}</div>}
       <div className="table-scroll"><table className="data-table"><thead><tr><th>Document</th><th>Department</th><th>Clearance</th><th>Version</th><th>Status</th><th>Uploaded</th><th className="actions-col">Actions</th></tr></thead><tbody>
         {loading && <tr><td colSpan={7} className="table-loading">Loading documents…</td></tr>}

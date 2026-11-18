@@ -297,6 +297,7 @@ async def list_documents_for_user_page(
     department: Optional[str] = None,
     search: Optional[str] = None,
     status_filter: Optional[DocumentStatus] = None,
+    clearance_filter: Optional[ClearanceLevel] = None,
     page: int = 1,
     page_size: int = 25,
 ) -> Tuple[List[Document], int]:
@@ -325,6 +326,8 @@ async def list_documents_for_user_page(
         conditions.append(or_(Document.title.ilike(term), Document.filename.ilike(term)))
     if status_filter:
         conditions.append(Document.status == status_filter)
+    if clearance_filter:
+        conditions.append(Document.clearance_level == clearance_filter)
 
     count_stmt = select(func.count(Document.id))
     data_stmt = select(Document)
