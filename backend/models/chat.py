@@ -90,6 +90,7 @@ class PlanTaskType(str, Enum):
 
 class ToolAction(str, Enum):
     """Typed sub-actions emitted by the Fast LLM planner so tools don't rely on regex heuristics."""
+    NONE = "none"
     DRIVE_LIST = "drive_list"
     DRIVE_SEARCH = "drive_search"
     DRIVE_READ_FILE = "drive_read_file"

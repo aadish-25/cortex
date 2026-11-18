@@ -316,9 +316,9 @@ class GoogleDriveService:
                     )
                     sections = parse_file(parse_name, resp.content)
                     extracted = "\n\n".join(
-                        f"## {sec.heading}\n{sec.content}" if sec.heading else sec.content
+                        f"## {sec.section}\n{sec.text}" if sec.section else sec.text
                         for sec in sections
-                        if sec.content
+                        if sec.text
                     ).strip()
                     if not extracted:
                         return {

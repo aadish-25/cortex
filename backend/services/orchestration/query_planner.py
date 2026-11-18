@@ -63,14 +63,14 @@ class LLMPlanTask(BaseModel):
         description="Task intent type: INTERNAL_RAG, EXTERNAL_WEB, STRUCTURED_LOOKUP, ACTION_WORKFLOW, GITHUB_SEARCH, DRIVE_SEARCH, ADMIN_OPERATION, DIRECT_CHAT"
     )
     query: str = Field(description="Clean, typo-corrected search query, filename, or instruction for this specific task")
-    tool_action: Optional[ToolAction] = Field(
-        default=None,
+    tool_action: ToolAction = Field(
+        default=ToolAction.NONE,
         description=(
             "Sub-action for tool tasks: "
             "DRIVE_SEARCH -> 'drive_list' | 'drive_search' | 'drive_read_file'; "
             "GITHUB_SEARCH -> 'github_list_issues' | 'github_issues_with_files' | 'github_list_prs' | 'github_search_code' | 'github_read_file'; "
             "ADMIN_OPERATION -> 'admin_health' | 'admin_audit_logs' | 'admin_doc_status' | 'admin_reindex'. "
-            "Null for other task types."
+            "'none' for other task types."
         ),
     )
     depends_on: List[int] = Field(default_factory=list, description="IDs of prerequisite tasks that must complete first")
@@ -378,7 +378,7 @@ async def plan_and_decompose_query(
                 for t in parsed.tasks:
                     # Enforce RBAC fail-closed: non-admins can never execute ADMIN_OPERATION
                     task_type = t.type
-                    tool_action = t.tool_action
+                    tool_action = None if (t.tool_action == ToolAction.NONE or not t.tool_action) else t.tool_action
                     if task_type == PlanTaskType.ADMIN_OPERATION and user_role != "Admin":
                         task_type = PlanTaskType.INTERNAL_RAG
                         tool_action = None
