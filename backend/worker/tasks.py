@@ -1,27 +1,15 @@
-"""Celery tasks for document indexing and vector-store reconciliation."""
+"""Celery tasks for document indexing and vector-store reconciliation.
+
+Heavy parsing, vector, and sweeper modules are imported lazily inside task
+execution so the Celery master process stays lean before prefork().
+"""
 import asyncio
 import logging
-import uuid
 from pathlib import Path
 from typing import Any, Dict
+import uuid
 
-from qdrant_client import models
-from sqlmodel import select
-
-from backend.core.config import settings
-from backend.db.database import async_session
-from backend.db.qdrant import get_qdrant_client
-from backend.models.document import Document
-from backend.services.ingestion.chunking_service import chunk_sections
-from backend.services.ingestion.document_service import (
-    finalize_document_activation,
-    mark_document_failed,
-    record_document_processing_log,
-)
-from backend.services.ingestion.ingestion_service import parse_file
-from backend.services.vector.vector_service import activate_document_version, index_document_chunks
 from backend.worker.celery_app import celery_app
-from backend.worker.sweeper import run_reconciliation_sweeper
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +23,22 @@ logger = logging.getLogger(__name__)
 )
 def reindex_document_task(self, doc_id_str: str) -> Dict[str, Any]:
     """Rebuild a document's vectors from its retained original source file."""
+    from qdrant_client import models
+    from sqlmodel import select
+
+    from backend.core.config import settings
+    from backend.db.database import async_session
+    from backend.db.qdrant import get_qdrant_client
+    from backend.models.document import Document
+    from backend.services.ingestion.chunking_service import chunk_sections
+    from backend.services.ingestion.document_service import (
+        finalize_document_activation,
+        mark_document_failed,
+        record_document_processing_log,
+    )
+    from backend.services.ingestion.ingestion_service import parse_file
+    from backend.services.vector.vector_service import activate_document_version, index_document_chunks
+
     logger.info("Starting document reindex task for document_id=%s", doc_id_str)
 
     async def _run() -> Dict[str, Any]:
@@ -64,7 +68,6 @@ def reindex_document_task(self, doc_id_str: str) -> Dict[str, Any]:
                 await record_document_processing_log(session, doc.id, "chunk", "COMPLETED", f"Prepared {len(chunks)} chunks for indexing.")
 
                 client = get_qdrant_client()
-                # Reindexing the same version must not leave duplicate live points.
                 client.delete(
                     collection_name=settings.QDRANT_COLLECTION,
                     points_selector=models.FilterSelector(
@@ -126,6 +129,10 @@ def reindex_document_task(self, doc_id_str: str) -> Dict[str, Any]:
 )
 def reconcile_vector_store_task() -> Dict[str, Any]:
     """Run periodic bidirectional reconciliation between SQL and Qdrant."""
+    from backend.db.database import async_session
+    from backend.db.qdrant import get_qdrant_client
+    from backend.worker.sweeper import run_reconciliation_sweeper
+
     async def _run():
         async with async_session() as session:
             return await run_reconciliation_sweeper(session, get_qdrant_client())
