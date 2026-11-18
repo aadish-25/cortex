@@ -156,7 +156,7 @@ Cortex features an enterprise-grade, privacy-first long-term memory engine decou
 
 | Tier | Storage | Retention | Invalidation & Lifecycle |
 |---|---|---|---|
-| **Tier 1: Authoritative Profile** | PostgreSQL `users` table | Permanent | Synced from HR/SSO profile (`name`, `department`, `role`, `clearance_level`). Injected into every turn. |
+| **Tier 1: Authoritative Profile** | PostgreSQL `users` table | Permanent | Core user account profile (`name`, `department`, `role`, `clearance_level`). Injected into every turn. |
 | **Tier 2: Hot Long-Term Memory** | Redis Cache (`user:{id}:pref_memories`) | Millisecond access | Fast-cached preference memories (<3ms) and active memory count (<1ms). Invalidated on write/delete. |
 | **Tier 3: Cold Episodic Memory** | Qdrant + PostgreSQL `user_memories` | Persistent | Hybrid dense vector search (`bge-small-en-v1.5`, 384d) verified against PostgreSQL active records. |
 
