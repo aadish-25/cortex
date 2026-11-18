@@ -47,6 +47,7 @@ class ChatMessageRequest(BaseModel):
 class RegenerateRequest(BaseModel):
     message_id: uuid.UUID = Field(..., description="New assistant message ID used for SSE replay")
     selected_model: Optional[str] = None
+    custom_instruction: Optional[str] = None
 
 
 class FeedbackRequest(BaseModel):
@@ -296,11 +297,15 @@ async def regenerate_assistant_message(
     )
     next_variant = int(variants_result.scalar_one() or 1) + 1
 
+    effective_prompt = parent.content
+    if payload.custom_instruction and payload.custom_instruction.strip():
+        effective_prompt = f"{parent.content}\n\n[Regeneration request modification: {payload.custom_instruction.strip()}]"
+
     stream_generator = chat_service.stream_chat_turn(
         session=db_session,
         client=get_qdrant_client(),
         user=current_user,
-        user_message=parent.content,
+        user_message=effective_prompt,
         conversation_id=conversation.id,
         message_id=payload.message_id,
         selected_model=payload.selected_model,

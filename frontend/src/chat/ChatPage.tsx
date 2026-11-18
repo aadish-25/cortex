@@ -125,13 +125,14 @@ function AssistantMessage({ message, variants, allMessages, onOpenSources, onReg
   variants: UIMessage[]
   allMessages: UIMessage[]
   onOpenSources: (message: UIMessage, number?: number, customData?: CitationData | null) => void
-  onRegenerate: (message: UIMessage) => void
+  onRegenerate: (message: UIMessage, customInstruction?: string) => void
   onFeedback: (message: UIMessage, positive: boolean) => void
   onSuggestion: (suggestion: string) => void
   currentFeedback?: { positive: boolean; category?: string; comment?: string }
   busy: boolean
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
+  const [customInstruction, setCustomInstruction] = useState('')
   const [variantIndex, setVariantIndex] = useState(Math.max(0, variants.findIndex((item) => item.id === message.id)))
   useEffect(() => setVariantIndex(Math.max(0, variants.findIndex((item) => item.id === message.id))), [variants.length, message.id])
   const allVariants = variants.length ? variants : [message]
@@ -159,17 +160,54 @@ function AssistantMessage({ message, variants, allMessages, onOpenSources, onReg
       {active.suggestions && active.suggestions.length > 0 && <div className="suggestion-row">{active.suggestions.map((suggestion) => <button key={suggestion} className="suggestion-pill" onClick={() => onSuggestion(suggestion)}>{suggestion}</button>)}</div>}
       {!active.streaming && <div className="message-toolbar">
         <div className="message-toolbar-left">
-          <button className="message-action" onClick={() => void navigator.clipboard?.writeText(active.content)} title="Copy answer"><Copy size={14} /></button>
           <button className={`message-action like-btn ${currentFeedback?.positive === true ? 'active' : ''}`} onClick={() => onFeedback(active, true)} title={currentFeedback?.positive === true ? 'Undo helpful' : 'Helpful'} aria-label="Helpful"><ThumbsUp size={14} /></button>
           <button className={`message-action dislike-btn ${currentFeedback?.positive === false ? 'active' : ''}`} onClick={() => onFeedback(active, false)} title={currentFeedback?.positive === false ? 'Edit feedback' : 'Not helpful'} aria-label="Not helpful"><ThumbsDown size={14} /></button>
+          <button className="message-action" onClick={() => void navigator.clipboard?.writeText(active.content)} title="Copy answer"><Copy size={14} /></button>
+          <div className="message-menu-wrap">
+            <button className="message-action" onClick={() => setMenuOpen((value) => !value)} aria-label="More answer actions"><MoreHorizontal size={17} /></button>
+            {menuOpen && <><button className="menu-dismiss" onClick={() => setMenuOpen(false)} aria-label="Close actions" /><div className="message-menu">
+              <button disabled={!hasSources} onClick={() => { onOpenSources(active, undefined, sources); setMenuOpen(false) }}><FileSearch size={15} /> View sources</button>
+              <div className="regenerate-menu-section">
+                <span className="regenerate-heading">Ask to change response</span>
+                <div className="regenerate-input-wrap">
+                  <input
+                    type="text"
+                    className="regenerate-input"
+                    placeholder="e.g. shorten it, add detail..."
+                    value={customInstruction}
+                    onChange={(e) => setCustomInstruction(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault()
+                        if (customInstruction.trim() && !busy) {
+                          onRegenerate(active, customInstruction.trim())
+                          setMenuOpen(false)
+                          setCustomInstruction('')
+                        }
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="regenerate-submit-btn"
+                    disabled={!customInstruction.trim() || busy}
+                    onClick={() => {
+                      if (customInstruction.trim() && !busy) {
+                        onRegenerate(active, customInstruction.trim())
+                        setMenuOpen(false)
+                        setCustomInstruction('')
+                      }
+                    }}
+                    title="Regenerate with custom instruction"
+                  >
+                    <ArrowUp size={12} />
+                  </button>
+                </div>
+                <button disabled={busy} onClick={() => { onRegenerate(active); setMenuOpen(false) }}><RefreshCw size={15} /> Try again</button>
+              </div>
+            </div></>}
+          </div>
           {allVariants.length > 1 && <div className="variant-switcher"><button className="message-action" disabled={variantIndex === 0} onClick={() => setVariantIndex((value) => value - 1)}><ChevronLeft size={14} /></button><span>{active.variant_index || variantIndex + 1} / {allVariants.length}</span><button className="message-action" disabled={variantIndex >= allVariants.length - 1} onClick={() => setVariantIndex((value) => value + 1)}><ChevronRight size={14} /></button></div>}
-        </div>
-        <div className="message-menu-wrap">
-          <button className="message-action" onClick={() => setMenuOpen((value) => !value)} aria-label="More answer actions"><MoreHorizontal size={17} /></button>
-          {menuOpen && <><button className="menu-dismiss" onClick={() => setMenuOpen(false)} aria-label="Close actions" /><div className="message-menu">
-            <button disabled={!hasSources} onClick={() => { onOpenSources(active, undefined, sources); setMenuOpen(false) }}><FileSearch size={15} /> View sources</button>
-            <button disabled={busy} onClick={() => { onRegenerate(active); setMenuOpen(false) }}><RefreshCw size={15} /> Regenerate answer</button>
-          </div></>}
         </div>
       </div>}
     </div>
@@ -345,12 +383,16 @@ export function ChatPage() {
     await startStream('/api/v1/chat/message', { message: clean, conversation_id: conversationId || null, message_id: assistantId, selected_model: selectedModel || null }, assistantId)
   }
 
-  async function regenerate(message: UIMessage) {
+  async function regenerate(message: UIMessage, customInstruction?: string) {
     if (isStreaming) return
     const assistantId = crypto.randomUUID()
     const placeholder: UIMessage = { ...message, id: assistantId, content: '', streaming: true, error: undefined, interrupted: false, variant_index: message.variant_index + 1, steps: [], suggestions: undefined }
     setMessages((current) => [...current, placeholder])
-    await startStream(`/api/v1/chat/messages/${message.id}/regenerate`, { message_id: assistantId, selected_model: selectedModel || null }, assistantId)
+    await startStream(`/api/v1/chat/messages/${message.id}/regenerate`, {
+      message_id: assistantId,
+      selected_model: selectedModel || null,
+      custom_instruction: customInstruction || null,
+    }, assistantId)
     if (conversationId) await loadMessages(conversationId, 1)
   }
 

@@ -677,7 +677,7 @@ class ChatService:
                     prompt=sandboxed_user_prompt,
                     system_prompt=full_system_prompt,
                     model=target_model,
-                    temperature=0.2,
+                    temperature=0.7 if variant_index > 1 else 0.2,
                     user_id=user.id,
                     session=session,
                 ):
