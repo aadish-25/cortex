@@ -28,6 +28,15 @@ export function MemoriesPage() {
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [bulkDeleting, setBulkDeleting] = useState(false)
   const [confirmClearAll, setConfirmClearAll] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<Memory | null>(null)
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false)
+
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(''), 3500)
+      return () => clearTimeout(timer)
+    }
+  }, [toast])
 
   const [adding, setAdding] = useState(false)
   const [newText, setNewText] = useState('')
@@ -120,15 +129,19 @@ export function MemoriesPage() {
     }
   }
 
-  async function removeMemory(id: string) {
+  async function confirmSingleDelete() {
+    if (!deleteTarget) return
+    const id = deleteTarget.memory_id
     try {
       await api(`/api/v1/chat/memories/${encodeURIComponent(id)}`, { method: 'DELETE' })
       setMemories((current) => current.filter((item) => item.memory_id !== id))
       setSelectedIds((current) => current.filter((item) => item !== id))
       setTotal((value) => Math.max(0, value - 1))
-      setToast('Memory removed.')
+      setToast('Memory deleted.')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not delete this memory.')
+    } finally {
+      setDeleteTarget(null)
     }
   }
 
@@ -184,7 +197,7 @@ export function MemoriesPage() {
         <div className="memory-header-actions">
           <span className="count-label">{total} saved</span>
           <button className="primary-button compact-button" onClick={() => { setError(''); setAdding(true) }}>
-            <Plus size={14} /> Add memory
+            Add memory <Plus size={14} />
           </button>
         </div>
       </header>
@@ -192,7 +205,6 @@ export function MemoriesPage() {
       <section className="panel memories-panel">
         <div className="panel-heading">
           <div>
-            <p className="eyebrow">PERSONAL CONTEXT</p>
             <h2><Brain size={19} /> Saved memories</h2>
             <p className="panel-subtitle">Filter, search, edit, or delete memories anytime. You can also manage them directly in chat.</p>
           </div>
@@ -231,7 +243,7 @@ export function MemoriesPage() {
               {allSelected ? 'Deselect all' : 'Select all'}
             </button>
             {selectedIds.length > 0 && (
-              <button type="button" className="secondary-button compact-button danger-text" disabled={bulkDeleting} onClick={() => void removeSelected()}>
+              <button type="button" className="secondary-button compact-button danger-text" disabled={bulkDeleting} onClick={() => setConfirmBulkDelete(true)}>
                 <Trash2 size={13} /> {bulkDeleting ? 'Deleting…' : `Delete selected (${selectedIds.length})`}
               </button>
             )}
@@ -259,7 +271,7 @@ export function MemoriesPage() {
               selected={selectedIds.includes(memory.memory_id)}
               onToggleSelect={toggleSelect}
               onEdit={openEdit}
-              onDelete={(id) => void removeMemory(id)}
+              onDelete={(mem) => setDeleteTarget(mem)}
             />
           ))}
         </div>
@@ -300,6 +312,32 @@ export function MemoriesPage() {
           onSubmit={saveEdit}
           onClose={() => setEditing(null)}
         />
+      )}
+
+      {deleteTarget && (
+        <div className="modal-overlay" onClick={() => setDeleteTarget(null)}>
+          <div className="modal-card confirm-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Delete memory?</h3>
+            <p>This will permanently remove "<strong>{deleteTarget.text}</strong>" from your saved profile.</p>
+            <div className="modal-actions">
+              <button type="button" className="secondary-button" onClick={() => setDeleteTarget(null)}>Cancel</button>
+              <button type="button" className="danger-button" onClick={() => void confirmSingleDelete()}>Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmBulkDelete && (
+        <div className="modal-overlay" onClick={() => setConfirmBulkDelete(false)}>
+          <div className="modal-card confirm-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Delete {selectedIds.length} memories?</h3>
+            <p>This will permanently delete the {selectedIds.length} selected memories from your profile.</p>
+            <div className="modal-actions">
+              <button type="button" className="secondary-button" onClick={() => setConfirmBulkDelete(false)}>Cancel</button>
+              <button type="button" className="danger-button" disabled={bulkDeleting} onClick={() => { setConfirmBulkDelete(false); void removeSelected() }}>{bulkDeleting ? 'Deleting…' : 'Delete'}</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {confirmClearAll && (

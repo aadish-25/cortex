@@ -311,6 +311,12 @@ export function ChatPage() {
   const [sourceNumber, setSourceNumber] = useState<number | null>(null)
   const [sourceData, setSourceData] = useState<CitationData | null>(null)
   const [toast, setToast] = useState('')
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(''), 3500)
+      return () => clearTimeout(timer)
+    }
+  }, [toast])
   const [feedbackState, setFeedbackState] = useState<Record<string, { positive: boolean; category?: string; comment?: string }>>({})
   const [dislikeModalTarget, setDislikeModalTarget] = useState<UIMessage | null>(null)
   const [dislikeCategory, setDislikeCategory] = useState<string>('')

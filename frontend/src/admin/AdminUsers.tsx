@@ -38,6 +38,12 @@ export function AdminUsers() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [toast, setToast] = useState('')
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(''), 3500)
+      return () => clearTimeout(timer)
+    }
+  }, [toast])
   const [modal, setModal] = useState<'create' | 'edit' | 'review' | null>(null)
   const [selected, setSelected] = useState<User | null>(null)
   const [form, setForm] = useState(emptyForm)

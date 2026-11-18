@@ -687,9 +687,11 @@ button.suggestion-pill:hover { background: var(--primary-line); }
 /* Intelligent Memory Management UI */
 .memory-header-actions { display: flex; align-items: center; gap: 10px; }
 .memory-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
-.memory-bulk-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0 10px; }
-.memory-select-box { display: grid; place-items: center; padding: 4px; color: var(--muted); background: transparent; border: 0; border-radius: 5px; cursor: pointer; }
+.memory-bulk-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 38px; padding: 4px 0 8px; }
+.memory-select-box { display: grid; place-items: center; padding: 4px; color: var(--muted); background: transparent; border: 0; border-radius: 5px; cursor: pointer; transition: color 0.15s ease; }
 .memory-select-box:hover { color: var(--primary); background: var(--surface-hover); }
+.memory-select-box.selected { color: var(--primary, #2563eb); }
+.memory-row.row-selected { background: color-mix(in srgb, var(--primary) 6%, transparent); border-radius: 8px; }
 .memory-meta-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 2px; }
 .memory-meta-row .category-tag { color: var(--primary); background: var(--primary-soft); text-transform: capitalize; }
 .memory-row.superseded { opacity: 0.72; }

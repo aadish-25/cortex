@@ -15,6 +15,12 @@ export function AdminDocuments() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [toast, setToast] = useState('')
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(''), 3500)
+      return () => clearTimeout(timer)
+    }
+  }, [toast])
   const [uploadOpen, setUploadOpen] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [uploadForm, setUploadForm] = useState({ department: 'Engineering', clearance_level: 'Internal', title: '' })

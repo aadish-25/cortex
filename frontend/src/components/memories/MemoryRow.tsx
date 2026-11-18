@@ -12,7 +12,7 @@ export function MemoryRow({
   selected: boolean
   onToggleSelect: (id: string) => void
   onEdit: (memory: Memory) => void
-  onDelete: (id: string) => void
+  onDelete: (memory: Memory) => void
 }) {
   const isSuperseded = memory.status === 'superseded'
   const created = formatDate(memory.created_at)
@@ -20,14 +20,14 @@ export function MemoryRow({
   const showUpdated = updated && updated !== created
 
   return (
-    <div className={`memory-row ${isSuperseded ? 'superseded' : ''}`}>
+    <div className={`memory-row ${isSuperseded ? 'superseded' : ''} ${selected ? 'row-selected' : ''}`}>
       <button
         type="button"
-        className="memory-select-box"
+        className={`memory-select-box ${selected ? 'selected' : ''}`}
         onClick={() => onToggleSelect(memory.memory_id)}
         aria-label={selected ? 'Deselect memory' : 'Select memory'}
       >
-        {selected ? <CheckSquare size={15} /> : <Square size={15} />}
+        {selected ? <CheckSquare size={16} color="#2563eb" /> : <Square size={16} />}
       </button>
       <div className="memory-copy">
         <strong>{memory.text}</strong>
@@ -53,7 +53,7 @@ export function MemoryRow({
         )}
         <button
           className="icon-button small danger"
-          onClick={() => onDelete(memory.memory_id)}
+          onClick={() => onDelete(memory)}
           aria-label="Delete memory"
           title="Delete memory"
         >
