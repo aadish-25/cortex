@@ -78,18 +78,6 @@ class LLMPlanTask(BaseModel):
 
 class LLMExecutionPlan(BaseModel):
     tasks: List[LLMPlanTask] = Field(description="List of plan tasks to execute")
-    should_save_memory: bool = Field(
-        default=False,
-        description="True if the user shared a persistent personal fact/preference (e.g. 'I like mermaid diagrams', 'I prefer code snippets', 'My base office is Pune') OR explicitly asked to save/remember something (including referring to the previous turn).",
-    )
-    memory_fact: Optional[str] = Field(
-        default=None,
-        description="If should_save_memory is True, the clean, typo-corrected single sentence fact/preference to save into the user's Memories (pulling context from recent history if the user just said 'add to memories'). Otherwise null.",
-    )
-    memory_category: Optional[str] = Field(
-        default=None,
-        description="If should_save_memory is True, one of: 'preference', 'tech_stack', 'project_context', 'location', 'general'. Otherwise null.",
-    )
 
 
 # ==========================================
@@ -357,12 +345,11 @@ async def plan_and_decompose_query(
             "- GITHUB_SEARCH: Repository code, issues, PRs, or opening a repo file. Set `tool_action` to `github_list_issues`, `github_issues_with_files`, `github_list_prs`, `github_search_code`, or `github_read_file` (with file path in `query`).\n"
             "- DRIVE_SEARCH: Google Drive files. Set `tool_action` to `drive_list` (`query=\"\"`), `drive_search`, or `drive_read_file` (exact file name/keyword in `query`).\n"
             "- ADMIN_OPERATION (Admin role only): `admin_health`, `admin_audit_logs`, `admin_doc_status`, or `admin_reindex`.\n"
-            "- DIRECT_CHAT: Greetings, general conversation, assistant capability questions, or personal preference/memory updates.\n\n"
+            "- DIRECT_CHAT: Greetings, general conversation, assistant capability questions, or personal advice/questions not requiring enterprise tools.\n\n"
             f"Authenticated role: {user_role or 'Unknown'}.\n"
             "Principles:\n"
             "1. Context-first tool selection: Never hard-assume a file request belongs to Drive — use Recent Conversation Context and cues to pick Drive vs GitHub vs INTERNAL_RAG.\n"
-            "2. Personalization & Memory: Whenever the user states a durable personal fact/preference or asks you to remember/personalize responses (referring to current or prior turns), set `should_save_memory=true` with a clean `memory_fact` and `memory_category`, and route the response turn to `DIRECT_CHAT` unless another tool is also requested.\n"
-            "3. Decompose multi-intent prompts into minimal tasks with `depends_on` only where an action requires upstream output.\n\n"
+            "2. Decompose multi-intent prompts into minimal tasks with `depends_on` only where an action requires upstream output.\n\n"
         )
         prompt = f"{planner_instructions}{history_section}User Prompt: {active_query}\n"
 
@@ -409,9 +396,6 @@ async def plan_and_decompose_query(
                     original_query=query,
                     rewritten_query=active_query if was_rewritten else None,
                     was_rewritten=was_rewritten,
-                    should_save_memory=bool(parsed.should_save_memory and parsed.memory_fact),
-                    memory_fact=parsed.memory_fact.strip() if parsed.memory_fact else None,
-                    memory_category=parsed.memory_category,
                 )
         except Exception as exc:
             logger.warning("LLM DAG decomposition failed, falling back to offline heuristic: %s", exc)
