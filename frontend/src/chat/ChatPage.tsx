@@ -120,7 +120,7 @@ const FEEDBACK_CATEGORIES = [
   { id: 'OTHER', label: 'Other' },
 ]
 
-function AssistantMessage({ message, variants, allMessages, onOpenSources, onRegenerate, onFeedback, onSuggestion, currentFeedback, busy }: {
+function AssistantMessage({ message, variants, allMessages, onOpenSources, onRegenerate, onFeedback, onSuggestion, feedbackState, busy }: {
   message: UIMessage
   variants: UIMessage[]
   allMessages: UIMessage[]
@@ -128,7 +128,7 @@ function AssistantMessage({ message, variants, allMessages, onOpenSources, onReg
   onRegenerate: (message: UIMessage, customInstruction?: string) => void
   onFeedback: (message: UIMessage, positive: boolean) => void
   onSuggestion: (suggestion: string) => void
-  currentFeedback?: { positive: boolean; category?: string; comment?: string }
+  feedbackState?: Record<string, { positive: boolean; category?: string; comment?: string }>
   busy: boolean
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
@@ -138,6 +138,7 @@ function AssistantMessage({ message, variants, allMessages, onOpenSources, onReg
   const allVariants = variants.length ? variants : [message]
   const active = allVariants[Math.min(variantIndex, allVariants.length - 1)] || message
   const sources = resolveMessageCitations(active, allMessages)
+  const currentFeedback = feedbackState?.[active.id]
   const hasSources = Boolean(sources?.citations?.length || sources?.evidence_chunks?.length || Object.keys(sources?.citation_map || {}).length)
   const latestStep = active.steps && active.steps.length > 0 ? active.steps[active.steps.length - 1] : null
   const isCompacting = Boolean(active.streaming && latestStep?.stage === 'compacting')
@@ -501,8 +502,8 @@ export function ChatPage() {
         {historyPages > historyPage && <div className="older-messages"><button className="secondary-button" disabled={loadingHistory} onClick={() => conversationId && void loadMessages(conversationId, historyPage + 1, true)}>{loadingHistory ? 'Loading…' : 'Load earlier messages'}</button></div>}
         {grouped.map((group, index) => <div className="message-group" key={group.user?.id || group.standalone?.id || index}>
           {group.user && <div className="user-message"><div className="user-message-bubble">{group.user.content}</div></div>}
-          {group.assistants.length > 0 && <AssistantMessage key={group.user?.id || group.assistants[0].id} message={group.assistants[group.assistants.length - 1]} variants={group.assistants} allMessages={messages} onOpenSources={(message, number, customData) => { setSourceMessage(message); setSourceNumber(number ?? null); setSourceData(customData || resolveMessageCitations(message, messages)) }} onRegenerate={regenerate} onFeedback={feedback} onSuggestion={(suggestion) => void sendMessage(suggestion)} currentFeedback={feedbackState[group.assistants[group.assistants.length - 1].id]} busy={isStreaming} />}
-          {group.standalone && <AssistantMessage message={group.standalone} variants={[group.standalone]} allMessages={messages} onOpenSources={(message, number, customData) => { setSourceMessage(message); setSourceNumber(number ?? null); setSourceData(customData || resolveMessageCitations(message, messages)) }} onRegenerate={regenerate} onFeedback={feedback} onSuggestion={(suggestion) => void sendMessage(suggestion)} currentFeedback={feedbackState[group.standalone.id]} busy={isStreaming} />}
+          {group.assistants.length > 0 && <AssistantMessage key={group.user?.id || group.assistants[0].id} message={group.assistants[group.assistants.length - 1]} variants={group.assistants} allMessages={messages} onOpenSources={(message, number, customData) => { setSourceMessage(message); setSourceNumber(number ?? null); setSourceData(customData || resolveMessageCitations(message, messages)) }} onRegenerate={regenerate} onFeedback={feedback} onSuggestion={(suggestion) => void sendMessage(suggestion)} feedbackState={feedbackState} busy={isStreaming} />}
+          {group.standalone && <AssistantMessage message={group.standalone} variants={[group.standalone]} allMessages={messages} onOpenSources={(message, number, customData) => { setSourceMessage(message); setSourceNumber(number ?? null); setSourceData(customData || resolveMessageCitations(message, messages)) }} onRegenerate={regenerate} onFeedback={feedback} onSuggestion={(suggestion) => void sendMessage(suggestion)} feedbackState={feedbackState} busy={isStreaming} />}
         </div>)}
       </div>}
     </div>
