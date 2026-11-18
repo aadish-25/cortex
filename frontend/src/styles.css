@@ -297,9 +297,11 @@ button.suggestion-pill:hover { background: var(--primary-line); }
 .composer-area { flex: 0 0 auto; padding: 10px 24px 12px; background: var(--page-bg); }
 .composer { width: min(870px, 100%); margin: 0 auto; padding: 12px 13px 9px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 13px; box-shadow: 0 4px 18px rgba(25, 35, 50, .035); }
 .composer:focus-within { border-color: color-mix(in srgb, var(--primary) 55%, var(--border)); box-shadow: 0 0 0 3px var(--primary-soft); }
-.composer textarea { display: block; width: 100%; min-height: 28px; max-height: 160px; padding: 2px 1px; resize: vertical; color: var(--text); background: transparent; border: 0; outline: 0; font-size: 12px; line-height: 1.55; }
+.composer textarea { display: block; width: 100%; min-height: 52px; max-height: 180px; padding: 4px 2px; resize: none; color: var(--text); background: transparent; border: 0; outline: 0; font-size: 13px; line-height: 1.55; box-sizing: border-box; }
 .composer textarea::placeholder { color: var(--muted-2); }
 .composer-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 9px; }
+.composer-footer-left { display: flex; align-items: center; gap: 8px; }
+.composer-model-menu { top: auto !important; bottom: 40px !important; left: 0 !important; right: auto !important; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25); }
 .composer-hint, .keyboard-hint { color: var(--muted-2); font-size: 9px; }
 .composer-actions { display: flex; align-items: center; gap: 10px; }
 .send-button { display: inline-grid; width: 30px; height: 30px; place-items: center; color: #fff; background: var(--primary); border: 0; border-radius: 8px; }
