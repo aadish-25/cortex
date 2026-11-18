@@ -27,7 +27,9 @@ from typing import Optional
 
 
 class RegisterRequest(BaseModel):
-    name: str = Field(min_length=2, max_length=120)
+    name: Optional[str] = Field(default=None, max_length=120)
+    first_name: Optional[str] = Field(default=None, min_length=1, max_length=60)
+    last_name: Optional[str] = Field(default=None, min_length=1, max_length=60)
     email: str = Field(min_length=5, max_length=254)
     username: Optional[str] = Field(default=None, min_length=3, max_length=60, pattern=r"^[A-Za-z0-9_.-]+$")
     password: Optional[str] = Field(default=None, min_length=10, max_length=128)
@@ -70,8 +72,17 @@ async def register_account(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="An account with that username or email already exists")
 
     raw_password = payload.password or secrets.token_urlsafe(24)
+    if payload.first_name and payload.last_name:
+        display_name = f"{payload.first_name.strip()} {payload.last_name.strip()}"
+    elif payload.name:
+        display_name = payload.name.strip()
+    elif payload.first_name:
+        display_name = payload.first_name.strip()
+    else:
+        display_name = "New Employee"
+
     user = User(
-        name=payload.name.strip(),
+        name=display_name,
         username=username,
         email=identifier,
         job_title=(payload.job_title or "Pending Assignment").strip(),

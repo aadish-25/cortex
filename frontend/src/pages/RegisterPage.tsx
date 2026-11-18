@@ -6,7 +6,7 @@ import CortexLogo from '../components/CortexLogo'
 
 export function RegisterPage() {
   const navigate = useNavigate()
-  const [form, setForm] = useState({ name: '', email: '' })
+  const [form, setForm] = useState({ first_name: '', last_name: '', email: '' })
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState(false)
@@ -19,7 +19,9 @@ export function RegisterPage() {
       await api('/api/v1/auth/register', {
         method: 'POST',
         body: JSON.stringify({
-          name: form.name.trim(),
+          first_name: form.first_name.trim(),
+          last_name: form.last_name.trim(),
+          name: `${form.first_name.trim()} ${form.last_name.trim()}`.trim(),
           email: form.email.trim(),
         }),
       })
@@ -52,8 +54,16 @@ export function RegisterPage() {
             <h2>Request access</h2>
             <p className="auth-subtitle">Share your details so an administrator can provision your corporate account.</p>
             <form className="auth-form" onSubmit={submit}>
-              <label htmlFor="name">Full name</label>
-              <div className="field-with-icon"><UserRound size={17} /><input id="name" value={form.name} onChange={(e) => setForm((c) => ({ ...c, name: e.target.value }))} placeholder="Your full name" required minLength={2} /></div>
+              <div className="auth-name-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                <div>
+                  <label htmlFor="first_name">First name</label>
+                  <div className="field-with-icon"><UserRound size={17} /><input id="first_name" value={form.first_name} onChange={(e) => setForm((c) => ({ ...c, first_name: e.target.value }))} placeholder="First name" required minLength={1} /></div>
+                </div>
+                <div>
+                  <label htmlFor="last_name">Last name</label>
+                  <div className="field-with-icon"><UserRound size={17} /><input id="last_name" value={form.last_name} onChange={(e) => setForm((c) => ({ ...c, last_name: e.target.value }))} placeholder="Last name" required minLength={1} /></div>
+                </div>
+              </div>
               <div className="label-row"><label htmlFor="email">Personal email</label></div>
               <div className="field-with-icon"><Mail size={17} /><input id="email" type="email" value={form.email} onChange={(e) => setForm((c) => ({ ...c, email: e.target.value }))} placeholder="you@gmail.com" required /></div>
               {error && <div className="form-error" role="alert">{error}</div>}

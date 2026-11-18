@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
+import re
 from typing import List, Optional
 import uuid
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func
 from sqlmodel import col, or_, select
@@ -79,6 +80,7 @@ async def list_users(
     department: Optional[str] = None,
     role: Optional[str] = None,
     is_active: Optional[bool] = None,
+    account_status: Optional[str] = Query(default=None),
     admin_user: User = Depends(require_user_manager),
     session: AsyncSession = Depends(get_db),
 ):
@@ -94,7 +96,16 @@ async def list_users(
             conditions.append(User.role == Role(role))
         except ValueError:
             raise HTTPException(status_code=422, detail="Invalid role filter")
-    if is_active is not None:
+    if account_status == "active":
+        conditions.append(User.is_active == True)
+    elif account_status == "pending":
+        conditions.append(User.is_active == False)
+        conditions.append(or_(User.department == "Unassigned", User.job_title == "Pending Assignment"))
+    elif account_status == "inactive":
+        conditions.append(User.is_active == False)
+        conditions.append(User.department != "Unassigned")
+        conditions.append(User.job_title != "Pending Assignment")
+    elif is_active is not None:
         conditions.append(User.is_active == is_active)
 
     count_stmt = select(func.count(User.id))
@@ -113,6 +124,49 @@ async def list_users(
         total=total,
         total_pages=(total + page_size - 1) // page_size,
     )
+
+@router.get("/suggest-company-email")
+async def suggest_company_email(
+    first_name: str = Query(..., min_length=1),
+    last_name: str = Query(default="", max_length=60),
+    exclude_user_id: Optional[uuid.UUID] = Query(default=None),
+    admin_user: User = Depends(require_user_manager),
+    session: AsyncSession = Depends(get_db),
+):
+    """
+    Generate a corporate email (firstname.lastname@cortex.com) handling collisions.
+    """
+    clean_first = re.sub(r"[^a-z0-9]", "", first_name.strip().lower()) or "user"
+    clean_last = re.sub(r"[^a-z0-9]", "", last_name.strip().lower())
+    base = f"{clean_first}.{clean_last}" if clean_last else clean_first
+
+    candidate = f"{base}@cortex.com"
+    counter = 1
+    while True:
+        stmt = select(User.id).where(User.email == candidate)
+        if exclude_user_id:
+            stmt = stmt.where(User.id != exclude_user_id)
+        res = await session.execute(stmt)
+        if not res.scalars().first():
+            break
+        candidate = f"{base}{counter}@cortex.com"
+        counter += 1
+
+    username_candidate = candidate.split("@")[0]
+    u_counter = 1
+    u_candidate = username_candidate
+    while True:
+        u_stmt = select(User.id).where(User.username == u_candidate)
+        if exclude_user_id:
+            u_stmt = u_stmt.where(User.id != exclude_user_id)
+        res_u = await session.execute(u_stmt)
+        if not res_u.scalars().first():
+            break
+        u_candidate = f"{username_candidate}{u_counter}"
+        u_counter += 1
+
+    return {"suggested_email": candidate, "suggested_username": u_candidate}
+
 
 @router.get("/{user_id}", response_model=UserRead)
 async def get_user_by_id(
@@ -179,6 +233,9 @@ async def update_user(
         user.department = payload.department
     if payload.clearance_level is not None:
         user.clearance_level = payload.clearance_level
+    if payload.password:
+        user.hashed_password = hash_password(payload.password)
+        user.token_version = max(1, user.token_version) + 1
 
     # If deactivating user, invalidate active sessions immediately (FRONTEND_SPECS)
     if payload.is_active is not None and payload.is_active != user.is_active:
@@ -222,3 +279,31 @@ async def revoke_sessions(
         "message": f"All sessions revoked for user {updated_user.username}",
         "token_version": updated_user.token_version,
     }
+
+
+@router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user(
+    user_id: uuid.UUID,
+    admin_user: User = Depends(require_user_manager),
+    session: AsyncSession = Depends(get_db),
+):
+    """
+    Remove or reject a user account request.
+    """
+    stmt = select(User).where(User.id == user_id)
+    res = await session.execute(stmt)
+    user = res.scalars().first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    await session.delete(user)
+    await session.commit()
+    await log_audit_event(
+        session=session,
+        event_tag="USER_DELETED",
+        category=AuditCategory.ADMIN,
+        user_id=admin_user.id,
+        status_code=204,
+        details=f"target_user_id={user_id}; name={user.name}; email={user.email}",
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

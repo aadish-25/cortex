@@ -53,3 +53,4 @@ class UserUpdate(SQLModel):
     department: Optional[str] = None
     clearance_level: Optional[ClearanceLevel] = None
     is_active: Optional[bool] = None
+    password: Optional[str] = Field(default=None, min_length=10, max_length=128)
