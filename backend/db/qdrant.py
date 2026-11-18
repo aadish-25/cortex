@@ -8,12 +8,22 @@ from backend.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Cached singleton clients keyed by (url, api_key) to avoid creating a new HTTP pool
+# and running a blocking GET /collections probe on every single API request.
+_CLIENT_CACHE: dict[tuple[str, Optional[str]], QdrantClient] = {}
 
-def get_qdrant_client(url: Optional[str] = None) -> QdrantClient:
+
+def reset_qdrant_client_cache() -> None:
+    """Clears cached network Qdrant clients (primarily for test isolation)."""
+    _CLIENT_CACHE.clear()
+
+
+def get_qdrant_client(url: Optional[str] = None, *, force_probe: bool = False) -> QdrantClient:
     """
     Client factory for Qdrant vector database.
-    - If URL is explicitly ':memory:', returns an isolated in-memory client.
-    - Otherwise connects to settings.QDRANT_URL with timeout.
+    - If URL is explicitly ':memory:', returns a fresh isolated in-memory client.
+    - Otherwise returns a pooled singleton client for `(url, api_key)`, probing
+      connectivity on first connect (or when `force_probe=True`).
     - If Qdrant is unreachable, raises ConnectionError with an actionable message.
     """
     target_url = url or settings.QDRANT_URL
@@ -21,16 +31,24 @@ def get_qdrant_client(url: Optional[str] = None) -> QdrantClient:
     if target_url == ":memory:":
         return QdrantClient(":memory:")
 
+    api_key = settings.QDRANT_API_KEY or None
+    cache_key = (target_url, api_key)
+    cached = _CLIENT_CACHE.get(cache_key)
+    if cached is not None and not force_probe:
+        return cached
+
     try:
-        client = QdrantClient(
+        client = cached or QdrantClient(
             url=target_url,
-            api_key=settings.QDRANT_API_KEY or None,
+            api_key=api_key,
             timeout=5,
         )
-        # Probe server connectivity
+        # Probe server connectivity on initial connect or explicit health probe
         client.get_collections()
+        _CLIENT_CACHE[cache_key] = client
         return client
     except Exception as exc:
+        _CLIENT_CACHE.pop(cache_key, None)
         err_msg = (
             f"Could not connect to Qdrant vector database at '{target_url}'. "
             "Please ensure Docker Desktop is running and launch required containers "
