@@ -285,7 +285,7 @@ async def test_list_and_delete_user_memories(auth_headers, test_user):
     )
     other_headers = {"Authorization": f"Bearer {other_token}"}
 
-    with patch("backend.routers.chat._safe_qdrant_client", return_value=mem_qdrant):
+    with patch("backend.routers.memories._safe_qdrant_client", return_value=mem_qdrant):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             # 1. Create two memories
