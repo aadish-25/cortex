@@ -46,17 +46,13 @@ function resolveMessageCitations(target: UIMessage, allMessages: UIMessage[]): C
   if (direct && (direct.citations?.length || direct.evidence_chunks?.length || Object.keys(direct.citation_map || {}).length)) {
     return direct
   }
-  const hasInlineCitation = /\[\d+\]/.test(target.content || '')
-  if (hasInlineCitation) {
-    const idx = allMessages.findIndex((m) => m.id === target.id)
-    const startIdx = idx >= 0 ? idx - 1 : allMessages.length - 1
-    for (let i = startIdx; i >= 0; i--) {
-      const prev = allMessages[i]
-      if (prev.sender === 'assistant') {
-        const prevData = citationData(prev.citations)
-        if (prevData && (prevData.citations?.length || prevData.evidence_chunks?.length || Object.keys(prevData.citation_map || {}).length)) {
-          return prevData
-        }
+  // Only look at immediate parent if this is an explicit variant; do NOT bleed citations across unrelated turns
+  if (target.parent_message_id) {
+    const parent = allMessages.find((m) => m.id === target.parent_message_id)
+    if (parent) {
+      const parentData = citationData(parent.citations)
+      if (parentData && (parentData.citations?.length || parentData.evidence_chunks?.length || Object.keys(parentData.citation_map || {}).length)) {
+        return parentData
       }
     }
   }

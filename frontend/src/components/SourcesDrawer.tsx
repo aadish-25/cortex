@@ -5,6 +5,11 @@ import type { CitationData, EvidenceRef } from '../api/types'
 
 interface EvidenceContext { target: { text: string; citation: string; section: string }; preceding?: { text: string; citation: string; section: string } | null; succeeding?: { text: string; citation: string; section: string } | null }
 
+function cleanDocTitle(citation?: string): string {
+  if (!citation) return 'Document Source'
+  return citation.replace(/^\[(.*?)\]$/, '$1').replace(/\s*—\s*https?:\/\/.*$/, '').trim() || 'Document Source'
+}
+
 function normalizeCitationData(value?: CitationData | string[] | null): CitationData {
   if (!value) return { citations: [], citation_map: {}, evidence_chunks: [] }
   if (Array.isArray(value)) return { citations: value, citation_map: Object.fromEntries(value.map((item, index) => [String(index + 1), item])), evidence_chunks: [] }
@@ -61,7 +66,13 @@ export function SourcesDrawer({ open, onClose, citationValue, focusNumber }: { o
         }}>
           <span className="source-number">{entry.number}</span><span className="source-entry-copy"><strong>{entry.citation || `Source ${entry.number}`}</strong><small>{entry.evidence?.section || 'Reference cited in conversation'}</small></span><ChevronRight size={16} />
         </button>)}</div>
-        {selected && <section className="evidence-panel"><div className="evidence-panel-title"><FileText size={16} /><span>{selected.section || 'Cited passage'}</span></div>
+        {selected && <section className="evidence-panel">
+          <div className="evidence-panel-header">
+            <div className="evidence-panel-title"><FileText size={16} /><span>{cleanDocTitle(selected.citation)}</span></div>
+            {selected.section && selected.section !== cleanDocTitle(selected.citation) && (
+              <div className="evidence-section-subtitle"><span className="section-label">Section:</span>{selected.section}</div>
+            )}
+          </div>
           {loading && <div className="loading-row"><LoaderCircle className="spin" size={17} /> Loading cited passage…</div>}
           {error && <p className="inline-error">{error}</p>}
           {context && <div className="evidence-stack">

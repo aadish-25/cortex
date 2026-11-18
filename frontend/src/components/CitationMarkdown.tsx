@@ -1,4 +1,4 @@
-import React, { Children, cloneElement, isValidElement, type ReactNode } from 'react'
+import React, { Children, cloneElement, isValidElement, useMemo, type ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -20,6 +20,17 @@ function withCitationChips(children: ReactNode, onOpen: (number: number) => void
 }
 
 export function CitationMarkdown({ content, onOpenSource }: { content: string; onOpenSource: (number: number) => void }) {
+  const normalizedContent = useMemo(() => {
+    if (!content) return ''
+    // Strip trailing hallucinated Citation Map text
+    const cleaned = content.replace(/\n\s*Citation Map:[\s\S]*$/i, '')
+    // Normalize multi-bracket citations like [2, 4] or [2, 5, 8] into separate chips [2] [4]
+    return cleaned.replace(/\[(\d+)(?:\s*,\s*(\d+))+\]/g, (match) => {
+      const numbers = match.replace(/[\[\]]/g, '').split(/\s*,\s*/)
+      return numbers.map((n) => `[${n}]`).join(' ')
+    })
+  }, [content])
+
   return <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{
     p: ({ children }) => <p>{withCitationChips(children, onOpenSource)}</p>,
     li: ({ children }) => <li>{withCitationChips(children, onOpenSource)}</li>,
@@ -31,5 +42,5 @@ export function CitationMarkdown({ content, onOpenSource }: { content: string; o
     th: ({ children }) => <th>{withCitationChips(children, onOpenSource)}</th>,
     a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer">{children}</a>,
     code: ({ children, className }) => <code className={className}>{children}</code>,
-  }}>{content}</ReactMarkdown></div>
+  }}>{normalizedContent}</ReactMarkdown></div>
 }

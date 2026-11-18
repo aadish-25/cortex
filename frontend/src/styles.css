@@ -330,7 +330,10 @@ button.suggestion-pill:hover { background: var(--primary-line); }
 .source-entry-copy small { color: var(--muted); font-size: 9px; }
 .source-entry > svg { color: var(--muted-2); }
 .evidence-panel { margin-top: 18px; padding-top: 15px; border-top: 1px solid var(--border); }
-.evidence-panel-title { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; color: var(--text); font-size: 11px; font-weight: 700; }
+.evidence-panel-header { margin-bottom: 12px; }
+.evidence-panel-title { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; color: var(--text); font-size: 13px; font-weight: 700; line-height: 1.4; }
+.evidence-section-subtitle { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 4px; background: var(--surface-soft); border: 1px solid var(--border); color: var(--muted); font-size: 10px; font-weight: 500; }
+.evidence-section-subtitle .section-label { font-weight: 700; color: var(--muted-2); margin-right: 4px; }
 .evidence-stack { display: flex; flex-direction: column; gap: 8px; }
 .evidence-context, .evidence-target { padding: 11px; border-radius: 8px; }
 .evidence-context { background: var(--surface-soft); border: 1px solid var(--border); }
