@@ -282,7 +282,19 @@ export function ChatPage() {
     try {
       const result = await api<Page<ChatMessage>>(`/api/v1/chat/conversations/${id}/messages?page=${page}&page_size=40`)
       setMessages((current) => {
-        const mapped = result.items.map((item) => ({ ...item, interrupted: item.is_complete === false })) as UIMessage[]
+        const currentById = new Map(current.map((item) => [item.id, item]))
+        const mapped = result.items.map((item) => {
+          const prev = currentById.get(item.id)
+          return {
+            ...item,
+            interrupted: item.is_complete === false,
+            actionDraft: prev?.actionDraft,
+            suggestions: prev?.suggestions,
+            corpusGap: prev?.corpusGap,
+            memoryEvent: prev?.memoryEvent,
+            steps: prev?.steps,
+          }
+        }) as UIMessage[]
         if (!prepend || page === 1) return mapped
         const existing = new Set(current.map((item) => item.id))
         return [...mapped.filter((item) => !existing.has(item.id)), ...current]
