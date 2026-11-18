@@ -29,6 +29,7 @@ class User(UserBase, table=True):
 
 class UserRead(UserBase):
     id: uuid.UUID
+    must_change_password: bool = Field(default=False)
     created_at: datetime
     updated_at: datetime
 

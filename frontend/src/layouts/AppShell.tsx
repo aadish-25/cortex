@@ -3,6 +3,7 @@ import { Outlet, useLocation } from 'react-router-dom'
 import { Menu, PanelLeftClose } from 'lucide-react'
 import { Sidebar } from './Sidebar'
 import { ThemeButton, useTheme } from '../components/ThemeToggle'
+import { MandatoryPasswordModal } from '../components/MandatoryPasswordModal'
 
 function pageBreadcrumb(pathname: string): { section: string; label: string } {
   if (pathname.startsWith('/admin/overview')) return { section: 'ADMINISTRATION', label: 'Overview' }
@@ -43,6 +44,7 @@ export function AppShell() {
       <div className="app-main-content">
         <Outlet />
       </div>
+      <MandatoryPasswordModal />
     </main>
   </div>
 }

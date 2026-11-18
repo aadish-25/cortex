@@ -239,7 +239,14 @@ async def update_user(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Administrators cannot modify an employee's personal password. Employees must change their own password.",
             )
-        user.hashed_password = hash_password(payload.password)
+        cleaned = payload.password.strip()
+        from backend.core.security import DEFAULT_ORGANIZATION_PASSWORDS
+        if cleaned.lower() in {p.lower() for p in DEFAULT_ORGANIZATION_PASSWORDS}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This password is not allowed. You cannot keep or reuse the default company password.",
+            )
+        user.hashed_password = hash_password(cleaned)
         user.token_version = max(1, user.token_version) + 1
 
     # If deactivating user, invalidate active sessions immediately (FRONTEND_SPECS)

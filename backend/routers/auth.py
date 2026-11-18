@@ -3,13 +3,13 @@ from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.config import settings
-from backend.core.security import get_current_user
-from backend.db.database import get_db
-from backend.models.enums import AuditCategory
-from backend.models.user import User, UserRead
-from backend.services.auth.audit_service import log_audit_event
-from backend.services.auth.auth_service import authenticate_user
-from backend.core.security import hash_password
+from backend.core.security import (
+    DEFAULT_ORGANIZATION_PASSWORDS,
+    get_current_user,
+    hash_password,
+    is_default_password,
+    verify_password,
+)
 from backend.models.enums import ClearanceLevel, Role
 from sqlmodel import select
 
@@ -136,10 +136,13 @@ async def login(
         path="/",
     )
 
+    user_read = UserRead.model_validate(user)
+    user_read.must_change_password = is_default_password(user.hashed_password)
+
     return TokenResponse(
         access_token=token,
         token_type="bearer",
-        user=UserRead.model_validate(user),
+        user=user_read,
     )
 
 
@@ -148,7 +151,62 @@ async def get_me(current_user: User = Depends(get_current_user)):
     """
     Retrieve current authenticated user's profile information.
     """
-    return UserRead.model_validate(current_user)
+    user_read = UserRead.model_validate(current_user)
+    user_read.must_change_password = is_default_password(current_user.hashed_password)
+    return user_read
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=10, max_length=128)
+
+
+@router.post("/change-password")
+async def change_password(
+    payload: ChangePasswordRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    """
+    Allow an authenticated user to change their password.
+    Blocks keeping or reusing the standard organization default password.
+    """
+    if not verify_password(payload.current_password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect.",
+        )
+
+    cleaned_new = payload.new_password.strip()
+    if cleaned_new.lower() in {p.lower() for p in DEFAULT_ORGANIZATION_PASSWORDS}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This password is not allowed. You cannot keep or reuse the default company password. Please choose a unique personal password.",
+        )
+
+    if cleaned_new == payload.current_password.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Your new password cannot be the same as your current password.",
+        )
+
+    current_user.hashed_password = hash_password(cleaned_new)
+    from datetime import datetime, timezone
+    current_user.updated_at = datetime.now(timezone.utc)
+    session.add(current_user)
+    await session.commit()
+    await session.refresh(current_user)
+
+    await log_audit_event(
+        session=session,
+        event_tag="AUTH_PASSWORD_CHANGED",
+        category=AuditCategory.AUTH,
+        user_id=current_user.id,
+        status_code=200,
+        details="User updated personal password",
+    )
+
+    return {"message": "Password changed successfully.", "must_change_password": False}
 
 
 @router.post("/logout")

@@ -34,6 +34,26 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     )
 
 
+DEFAULT_ORGANIZATION_PASSWORDS = {
+    "Welcome@Cortex2026!",
+    "welcome@cortex26",
+    "Welcome@Cortex26!",
+    "welcome@cortex2026",
+    "welcome@cortex2026!",
+}
+
+
+def is_default_password(hashed_password: str) -> bool:
+    """Return True if the user's password still matches any standard default company password."""
+    for default_pwd in DEFAULT_ORGANIZATION_PASSWORDS:
+        try:
+            if verify_password(default_pwd, hashed_password):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
     if expires_delta:

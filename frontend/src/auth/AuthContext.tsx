@@ -8,6 +8,7 @@ interface AuthContextValue {
   signIn: (identifier: string, password: string) => Promise<User>
   signOut: () => Promise<void>
   refreshUser: () => Promise<void>
+  updateUser: (updated: Partial<User>) => void
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -20,6 +21,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try { setUser(await getMe()) }
     catch { setUser(null) }
     finally { setLoading(false) }
+  }, [])
+
+  const updateUser = useCallback((updated: Partial<User>) => {
+    setUser((curr) => (curr ? { ...curr, ...updated } : null))
   }, [])
 
   useEffect(() => { void refreshUser() }, [refreshUser])
@@ -39,7 +44,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     finally { setUser(null) }
   }, [])
 
-  const value = useMemo(() => ({ user, loading, signIn, signOut, refreshUser }), [user, loading, signIn, signOut, refreshUser])
+  const value = useMemo(() => ({ user, loading, signIn, signOut, refreshUser, updateUser }), [user, loading, signIn, signOut, refreshUser, updateUser])
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 
