@@ -95,6 +95,22 @@ async def execute_explicit_command(
 
     actionable_ops = [op for op in plan.operations if op.op != MemoryOpType.NONE]
     if not actionable_ops:
+        none_ops = [op for op in plan.operations if op.op == MemoryOpType.NONE and (op.content or op.target_memory_ids)]
+        if none_ops:
+            matched_items: List[str] = []
+            for op in none_ops:
+                for mid in op.target_memory_ids:
+                    if mid in owned_by_id:
+                        matched_items.append(f"- [{owned_by_id[mid].category}] {owned_by_id[mid].content}")
+                if not matched_items and op.content:
+                    matched_items.append(f"- [{op.category or 'general'}] {op.content}")
+            summary = "This information is already saved in your long-term memory:\n" + "\n".join(matched_items) if matched_items else "This fact is already saved in your profile memory."
+            return MemoryCommandResult(
+                handled=True,
+                is_pure_memory_command=bool(plan.is_pure_memory_command and not (plan.remaining_user_query or "").strip()),
+                factual_summary=summary,
+                remaining_user_query=plan.remaining_user_query.strip() if plan.remaining_user_query else None,
+            )
         return MemoryCommandResult(handled=False)
 
     result = MemoryCommandResult(

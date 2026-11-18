@@ -9,36 +9,42 @@ class ExplicitCommandSignal:
     hinted_ops: List[str] = field(default_factory=list)
 
 
+_MEM_TOKEN = r"mem[oe]*r(?:y|ies|i)?"
+
 _EXPLICIT_ADD_PATTERNS = [
     re.compile(r"\bremember\s+(?:that|this|me)\b", re.IGNORECASE),
-    re.compile(r"\badd+\s+(?:this|that|it|.+?)?\s*to\s+(?:my\s+)?(?:long[- ]term\s+)?(?:memo?r(?:y|ies)|(?:[\w-]+\s+)?preferences?)\b", re.IGNORECASE),
-    re.compile(r"\bsave\s+(?:this|that|it|.+?)?\s*(?:to|in|as)\s+(?:my\s+|a\s+)?(?:long[- ]term\s+)?(?:memo?r(?:y|ies)|(?:[\w-]+\s+)?preferences?)\b", re.IGNORECASE),
+    re.compile(rf"\badd+\s+(?:this|that|it|.+?)?\s*to\s+(?:my\s+)?(?:long[- ]term\s+)?(?:{_MEM_TOKEN}|(?:[\w-]+\s+)?preferences?)\b", re.IGNORECASE),
+    re.compile(rf"\bsave\s+(?:this|that|it|.+?)?\s*(?:to|in|as)\s+(?:my\s+|a\s+)?(?:long[- ]term\s+)?(?:{_MEM_TOKEN}|(?:[\w-]+\s+)?preferences?)\b", re.IGNORECASE),
     re.compile(r"\bnote\s+that\s+i\b", re.IGNORECASE),
     re.compile(r"\bkeep\s+in\s+mind\s+(?:that\s+)?i\b", re.IGNORECASE),
-    re.compile(r"\bstore\s+(?:this|that)\s+in\s+(?:my\s+)?memo?r(?:y|ies)\b", re.IGNORECASE),
+    re.compile(rf"\bstore\s+(?:this|that)\s+in\s+(?:my\s+)?{_MEM_TOKEN}\b", re.IGNORECASE),
+    re.compile(r"\bcall\s+me\s+[\w\s-]{1,30}\b", re.IGNORECASE),
+    re.compile(r"\bmy\s+(?:phone|device|laptop|tech\s*stack|stack)\s+is\b", re.IGNORECASE),
+    re.compile(rf"\b(?:added|saved|stored)\s+to\s+(?:my\s+)?{_MEM_TOKEN}\b", re.IGNORECASE),
 ]
 
 _EXPLICIT_UPDATE_PATTERNS = [
-    re.compile(r"\b(?:update|change|modify|correct|edit)\s+(?:my|that|the)\s+(?:saved\s+)?(?:long[- ]term\s+)?memo?r(?:y|ies)\b", re.IGNORECASE),
+    re.compile(rf"\b(?:update|change|modify|correct|edit)\s+(?:my|that|the)\s+(?:saved\s+)?(?:long[- ]term\s+)?{_MEM_TOKEN}\b", re.IGNORECASE),
     re.compile(r"\b(?:update|change)\s+(?:my\s+)?.{1,50}\bpreference\s+to\b", re.IGNORECASE),
     re.compile(r"\bi\s+no\s+longer\s+(?:prefer|use|want|like|work\s+on)\b", re.IGNORECASE),
-    re.compile(r"\bupdate\s+that\s+memo?r(?:y|ies)\b", re.IGNORECASE),
+    re.compile(rf"\bupdate\s+that\s+{_MEM_TOKEN}\b", re.IGNORECASE),
     re.compile(r"\bi(?:'ve|\s+have)?\s+(?:switched|moved)\s+(?:from\s+\S+\s+)?to\s+\S+", re.IGNORECASE),
+    re.compile(rf"\bupdate\s+{_MEM_TOKEN}\b", re.IGNORECASE),
 ]
 
 _EXPLICIT_DELETE_PATTERNS = [
     re.compile(r"\bforget\s+(?:that|all|my|everything|about|any)\b", re.IGNORECASE),
-    re.compile(r"\b(?:delete|remove|erase|wipe|clear)\s+(?:all\s+)?(?:of\s+)?(?:my\s+|the\s+|everything\s+(?:in\s+|about\s+)?(?:my\s+)?)?(?:saved\s+|long[- ]term\s+)?memo?r(?:y|ies)\b", re.IGNORECASE),
+    re.compile(rf"\b(?:delete|remove|erase|wipe|clear)\s+(?:all\s+)?(?:of\s+)?(?:my\s+|the\s+|everything\s+(?:in\s+|about\s+)?(?:my\s+)?)?(?:saved\s+|long[- ]term\s+)?{_MEM_TOKEN}\b", re.IGNORECASE),
     re.compile(r"\b(?:delete|remove|forget)\s+everything\s+(?:you\s+remember\s+)?about\b", re.IGNORECASE),
-    re.compile(r"\b(?:delete|remove|forget)\s+all\s+(?:my\s+)?(?:long[- ]term\s+)?(?:memo?r(?:y|ies)|preferences)\b", re.IGNORECASE),
+    re.compile(rf"\b(?:delete|remove|forget)\s+all\s+(?:my\s+)?(?:long[- ]term\s+)?(?:{_MEM_TOKEN}|preferences)\b", re.IGNORECASE),
     re.compile(r"\bforget\s+this\b", re.IGNORECASE),
 ]
 
 _EXPLICIT_RETRIEVE_PATTERNS = [
     re.compile(r"\bwhat\s+(?:do\s+you|have\s+you)\s+remember(?:ed)?\s+(?:about\s+me)?\b", re.IGNORECASE),
     re.compile(r"\bwhat\s+(?:projects|preferences|facts|things|info(?:rmation)?)\s+(?:do\s+you|have\s+you)\s+(?:remember(?:ed)?|saved|stored)\b", re.IGNORECASE),
-    re.compile(r"\b(?:show|list|view|display)\s+(?:me\s+)?(?:everything|all|my)\s+(?:stored\s+in\s+|saved\s+|in\s+)?(?:my\s+)?(?:long[- ]term\s+)?(?:memo?r(?:y|ies)|(?:coding\s+|saved\s+|project[- ]related\s+)?(?:preferences|memo?r(?:y|ies)))\b", re.IGNORECASE),
-    re.compile(r"\bwhat(?:'s|\s+is)\s+(?:stored\s+|saved\s+)?in\s+my\s+(?:long[- ]term\s+)?memo?r(?:y|ies)\b", re.IGNORECASE),
+    re.compile(rf"\b(?:show|list|view|display)\s+(?:me\s+)?(?:everything|all|my)\s+(?:stored\s+in\s+|saved\s+|in\s+)?(?:my\s+)?(?:long[- ]term\s+)?(?:{_MEM_TOKEN}|(?:coding\s+|saved\s+|project[- ]related\s+)?(?:preferences|{_MEM_TOKEN}))\b", re.IGNORECASE),
+    re.compile(rf"\bwhat(?:'s|\s+is)\s+(?:stored\s+|saved\s+)?in\s+my\s+(?:long[- ]term\s+)?{_MEM_TOKEN}\b", re.IGNORECASE),
 ]
 
 # Trivial conversational messages that never need memory lookup or extraction
@@ -86,6 +92,9 @@ def detect_explicit_memory_command(message: str) -> ExplicitCommandSignal:
         ops.append("ADD")
     if any(p.search(text) for p in _EXPLICIT_RETRIEVE_PATTERNS):
         ops.append("RETRIEVE")
+
+    if not ops and re.search(r"\bmem[oe]*r\w*\b", text, re.IGNORECASE):
+        ops.append("UPDATE")
 
     return ExplicitCommandSignal(is_explicit=bool(ops), hinted_ops=ops)
 
