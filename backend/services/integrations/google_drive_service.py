@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import Any, Dict, List, Optional
 import httpx
 
@@ -9,6 +10,23 @@ from backend.core.rate_limiter import get_degradation_message, rate_limiter
 logger = logging.getLogger(__name__)
 
 DRIVE_API_BASE = "https://www.googleapis.com/drive/v3"
+
+# Phrases indicating the user wants to list/browse files in Drive rather than match a literal filename
+_DRIVE_LIST_ALL_PATTERN = re.compile(
+    r"^\s*(?:whts?|what'?s?|what\s+is|what\s+are|show|list|view|get|see|check|find)?\s*"
+    r"(?:all\s+)?(?:the\s+)?(?:my\s+)?(?:files?|docs?|documents?|folders?|items?|contents?)?\s*"
+    r"(?:do\s+i\s+have\s+|are\s+)?(?:stored\s+)?(?:in\s+)?(?:my\s+|our\s+|the\s+)?(?:google\s+|shared\s+)?drive\s*\??\s*$"
+    r"|^\s*(?:what|which)\s+files?\s+(?:do\s+i\s+have|are)\s+(?:stored|saved|uploaded|available|there)\s*\??\s*$",
+    re.IGNORECASE,
+)
+
+
+def _normalize_drive_query(query: str) -> str:
+    """Returns empty string for general 'list my drive' requests; strips quotes for keyword search."""
+    cleaned = (query or "").strip()
+    if not cleaned or _DRIVE_LIST_ALL_PATTERN.match(cleaned):
+        return ""
+    return cleaned.replace("\\", "\\\\").replace("'", "\\'")
 
 
 class GoogleDriveService:
@@ -61,7 +79,7 @@ class GoogleDriveService:
         query: str,
         folder_id: Optional[str] = None,
         mime_type: Optional[str] = None,
-        page_size: int = 5,
+        page_size: int = 15,
     ) -> Dict[str, Any]:
         """
         Searches Google Drive files within an optional folder and mimeType filter.
@@ -102,7 +120,10 @@ class GoogleDriveService:
         await rate_limiter.acquire("google_drive", cost=1)
 
         # Build Google Drive search query syntax
-        query_clauses = [f"name contains '{query}'", "trashed = false"]
+        normalized_query = _normalize_drive_query(query)
+        query_clauses = ["trashed = false"]
+        if normalized_query:
+            query_clauses.insert(0, f"name contains '{normalized_query}'")
         if target_folder:
             query_clauses.append(f"'{target_folder}' in parents")
         if mime_type:
@@ -134,9 +155,25 @@ class GoogleDriveService:
                 resp.raise_for_status()
                 data = resp.json()
                 files = data.get("files", [])[:page_size]
+                # If an exact-phrase name search returned nothing and it looks multi-word,
+                # retry with fullText search so natural-language Drive queries still find matches.
+                if not files and normalized_query and " " in normalized_query:
+                    fallback_clauses = [f"fullText contains '{normalized_query}'", "trashed = false"]
+                    if target_folder:
+                        fallback_clauses.append(f"'{target_folder}' in parents")
+                    if mime_type:
+                        fallback_clauses.append(f"mimeType = '{mime_type}'")
+                    fallback_params = dict(params, q=" and ".join(fallback_clauses))
+                    fb_resp = await client.get(
+                        f"{DRIVE_API_BASE}/files",
+                        headers=self._get_headers(),
+                        params=fallback_params,
+                    )
+                    if fb_resp.status_code == 200:
+                        files = fb_resp.json().get("files", [])[:page_size]
                 return {
                     "status": "SUCCESS",
-                    "query": query,
+                    "query": normalized_query or "all files",
                     "folder_id": target_folder,
                     "total_count": len(files),
                     "files": files,
@@ -199,8 +236,8 @@ class GoogleDriveService:
 
     async def read_file_text(self, file_id: str) -> Dict[str, Any]:
         """
-        Extracts plain-text representation from a Google Doc or text file.
-        For Google Docs, calls Drive export endpoint with text/plain.
+        Extracts plain-text representation from a Google Doc, DOCX, PDF, Markdown, or text file.
+        For images or unsupported binary formats, returns an explicit UNSUPPORTED_FILE_TYPE notice.
         """
         throttled = await self._check_rate_limit()
         if throttled:
@@ -210,6 +247,7 @@ class GoogleDriveService:
             return {
                 "status": "SUCCESS",
                 "id": file_id,
+                "name": f"File_{file_id}.gdoc",
                 "mimeType": "text/plain",
                 "content": f"Enterprise Shared Document [{file_id}]:\n- Standard Operating Procedure for AWS and Docker deployments.\n- Confidentiality notice: Internal corporate use only.\n",
             }
@@ -217,11 +255,29 @@ class GoogleDriveService:
         await rate_limiter.acquire("google_drive", cost=1)
 
         try:
-            # Check file metadata to determine if export or download is required
+            # Check file metadata to determine if export, parse, or unsupported notice is required
             meta = await self.get_file_metadata(file_id)
-            mime_type = meta.get("mimeType", "")
+            if meta.get("status") in {"RATE_LIMITED", "ERROR"}:
+                return meta
 
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            mime_type = meta.get("mimeType", "")
+            file_name = meta.get("name") or file_id
+            web_link = meta.get("webViewLink", f"https://drive.google.com/file/d/{file_id}/view")
+
+            if mime_type.startswith("image/"):
+                return {
+                    "status": "UNSUPPORTED_FILE_TYPE",
+                    "id": file_id,
+                    "name": file_name,
+                    "mimeType": mime_type,
+                    "webViewLink": web_link,
+                    "message": (
+                        f"I cannot open or visually inspect image files like '{file_name}' ({mime_type}). "
+                        f"You can view it directly in Google Drive here: {web_link}"
+                    ),
+                }
+
+            async with httpx.AsyncClient(timeout=20.0) as client:
                 if "application/vnd.google-apps" in mime_type:
                     # Google Docs/Sheets export endpoint
                     export_params: Dict[str, Any] = {"mimeType": "text/plain"}
@@ -251,17 +307,68 @@ class GoogleDriveService:
                         "content": None,
                     }
                 resp.raise_for_status()
+
+                lower_name = file_name.lower()
+                if lower_name.endswith((".pdf", ".docx")) or "pdf" in mime_type or "wordprocessingml" in mime_type:
+                    from backend.services.ingestion.ingestion_service import parse_file
+                    parse_name = file_name if lower_name.endswith((".pdf", ".docx")) else (
+                        f"{file_name}.pdf" if "pdf" in mime_type else f"{file_name}.docx"
+                    )
+                    sections = parse_file(parse_name, resp.content)
+                    extracted = "\n\n".join(
+                        f"## {sec.heading}\n{sec.content}" if sec.heading else sec.content
+                        for sec in sections
+                        if sec.content
+                    ).strip()
+                    if not extracted:
+                        return {
+                            "status": "UNSUPPORTED_FILE_TYPE",
+                            "id": file_id,
+                            "name": file_name,
+                            "mimeType": mime_type,
+                            "webViewLink": web_link,
+                            "message": f"No extractable text was found inside '{file_name}' (it may be scanned or empty). Direct link: {web_link}",
+                        }
+                    text_content = extracted
+                elif (
+                    "application/vnd.google-apps" in mime_type
+                    or mime_type.startswith("text/")
+                    or lower_name.endswith((".md", ".txt", ".csv", ".json", ".py", ".ts", ".js"))
+                ):
+                    text_content = resp.text
+                else:
+                    return {
+                        "status": "UNSUPPORTED_FILE_TYPE",
+                        "id": file_id,
+                        "name": file_name,
+                        "mimeType": mime_type,
+                        "webViewLink": web_link,
+                        "message": (
+                            f"File '{file_name}' ({mime_type}) is a binary format that cannot be read as text directly. "
+                            f"You can open it here: {web_link}"
+                        ),
+                    }
+
                 return {
                     "status": "SUCCESS",
                     "id": file_id,
-                    "name": meta.get("name"),
-                    "content": resp.text,
+                    "name": file_name,
+                    "mimeType": mime_type,
+                    "webViewLink": web_link,
+                    "content": text_content[:12000],
                 }
         except httpx.HTTPError as exc:
             logger.error("Google Drive read_file_text failed: %s", exc)
             return {
                 "status": "ERROR",
                 "message": f"Google Drive export error: {str(exc)}",
+                "content": None,
+            }
+        except Exception as exc:
+            logger.error("Google Drive file parsing failed for %s: %s", file_id, exc)
+            return {
+                "status": "ERROR",
+                "message": f"Could not extract text from Drive file: {str(exc)}",
                 "content": None,
             }
 

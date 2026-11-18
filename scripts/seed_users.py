@@ -23,7 +23,7 @@ INITIAL_USERS = [
         "password": "",
         "job_title": "System Administrator",
         "role": Role.ADMIN,
-        "department": "Engineering",
+        "department": "Enterprise",
         "clearance_level": ClearanceLevel.CONFIDENTIAL,
     },
     {

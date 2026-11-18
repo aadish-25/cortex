@@ -10,7 +10,7 @@ from sqlmodel import select
 from backend.core.security import get_current_user, require_document_manager
 from backend.db.database import get_db
 from backend.db.qdrant import get_qdrant_client
-from backend.models.document import DocumentRead
+from backend.models.document import Document, DocumentRead
 from backend.models.enums import ClearanceLevel, DocumentStatus, Role
 from backend.models.pagination import PaginatedResponse
 from backend.models.user import User

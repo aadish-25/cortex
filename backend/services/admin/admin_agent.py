@@ -17,9 +17,12 @@ import re
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from backend.core.config import settings
+from backend.models.chat import ToolAction
 from backend.models.document import Document
 from backend.models.enums import AuditCategory, Role
 from backend.models.user import User
@@ -31,6 +34,21 @@ from backend.services.admin.admin_service import (
     trigger_document_reindex,
 )
 from backend.services.auth.audit_service import log_audit_event
+from backend.services.orchestration.llm_service import llm_service
+
+
+class AdminToolSelection(BaseModel):
+    tool_name: str = Field(
+        description="One of: 'inspect_system_health', 'inspect_audit_logs', 'get_document_status', 'trigger_reindex', or 'unknown'"
+    )
+    category: Optional[str] = Field(
+        default=None,
+        description="For inspect_audit_logs: optional category ('AUTH', 'DOCUMENT', 'QUERY', 'WORKFLOW', 'ADMIN')",
+    )
+    identifier: Optional[str] = Field(
+        default=None,
+        description="For get_document_status or trigger_reindex: document UUID or filename",
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -293,33 +311,91 @@ class AdminAgent:
         session: AsyncSession,
         user: User,
         query: str,
+        tool_action: Optional[ToolAction] = None,
     ) -> Dict[str, Any]:
-        """Map explicit admin operational requests to the narrow tool catalog."""
+        """Map admin operational requests to the narrow tool catalog.
+        PRIMARY: Use LLM-emitted `tool_action` or Fast LLM `AdminToolSelection` Pydantic classifier.
+        FALLBACK (only when LLM is offline/unavailable): keyword heuristics.
+        """
         normalized = query.strip()
         lowered = normalized.lower()
         if user.role != Role.ADMIN:
             result = await self.execute_tool(session, user, "inspect_system_health", {})
             return {"status": "ADMIN_TOOL_RESULT", "message": self.format_response("inspect_system_health", result)}
 
-        if any(term in lowered for term in ("system health", "service health", "infrastructure health", "health of", "redis status", "qdrant status", "postgres status", "database status")) or re.search(r"\b(healthy|health check)\b", lowered):
+        tool_name: Optional[str] = None
+        arguments: Dict[str, Any] = {}
+
+        # 1. Primary path A: Structured tool_action already chosen by LLM query planner
+        if tool_action == ToolAction.ADMIN_HEALTH:
             tool_name, arguments = "inspect_system_health", {}
-        elif "audit" in lowered:
+        elif tool_action == ToolAction.ADMIN_AUDIT_LOGS:
             category = next((c for c in ("AUTH", "DOCUMENT", "QUERY", "WORKFLOW", "ADMIN") if c.lower() in lowered), None)
             tool_name, arguments = "inspect_audit_logs", {"limit": 20, "category": category}
-        elif any(term in lowered for term in ("reindex", "re-index", "retry ingestion")):
+        elif tool_action == ToolAction.ADMIN_REINDEX:
             match = UUID_PATTERN.search(normalized)
             if not match:
                 return {"status": "ADMIN_TOOL_RESULT", "message": "Provide the document ID to reindex it. You can copy it from Admin → Documents."}
             tool_name, arguments = "trigger_reindex", {"document_id": match.group(1)}
-        elif any(term in lowered for term in ("document status", "indexing status", "status of document", "check document")):
+        elif tool_action == ToolAction.ADMIN_DOC_STATUS:
             match = UUID_PATTERN.search(normalized)
             filename_match = re.search(r"[\w .()_-]+\.(?:pdf|docx|md|txt)\b", normalized, re.IGNORECASE)
             identifier = match.group(1) if match else filename_match.group(0).strip() if filename_match else ""
             if not identifier:
                 return {"status": "ADMIN_TOOL_RESULT", "message": "Specify a document ID or filename so I can inspect its status."}
             tool_name, arguments = "get_document_status", {"identifier": identifier}
-        else:
-            return {"status": "ADMIN_TOOL_RESULT", "message": "I can inspect system health, audit logs, document status, or trigger document reindexing. Use the Admin workspace for user and document management."}
+
+        # 2. Primary path B: Fast LLM structured classification when called directly without planner tool_action
+        if tool_name is None and llm_service.is_configured():
+            try:
+                selection = await llm_service.generate_structured(
+                    prompt=f"Admin request: {normalized}",
+                    response_model=AdminToolSelection,
+                    system_prompt=(
+                        "Select the exact admin tool for this operational request: "
+                        "'inspect_system_health', 'inspect_audit_logs', 'get_document_status', 'trigger_reindex', or 'unknown'. "
+                        "Extract optional audit category or document UUID/filename identifier if mentioned."
+                    ),
+                    model=settings.FAST_ROUTING_MODEL,
+                )
+                if selection and selection.tool_name in {"inspect_system_health", "inspect_audit_logs", "get_document_status", "trigger_reindex"}:
+                    tool_name = selection.tool_name
+                    if tool_name == "inspect_audit_logs":
+                        arguments = {"limit": 20, "category": selection.category}
+                    elif tool_name == "trigger_reindex":
+                        uuid_match = UUID_PATTERN.search(selection.identifier or normalized)
+                        if not uuid_match:
+                            return {"status": "ADMIN_TOOL_RESULT", "message": "Provide the document ID to reindex it. You can copy it from Admin → Documents."}
+                        arguments = {"document_id": uuid_match.group(1)}
+                    elif tool_name == "get_document_status":
+                        ident = (selection.identifier or "").strip()
+                        if not ident:
+                            return {"status": "ADMIN_TOOL_RESULT", "message": "Specify a document ID or filename so I can inspect its status."}
+                        arguments = {"identifier": ident}
+            except Exception as exc:
+                logger.warning("LLM AdminToolSelection failed (%s); falling back to heuristic", exc)
+
+        # 3. Offline / error fallback ONLY: keyword heuristic
+        if tool_name is None:
+            if any(term in lowered for term in ("system health", "service health", "infrastructure health", "health of", "redis status", "qdrant status", "postgres status", "database status")) or re.search(r"\b(healthy|health check)\b", lowered):
+                tool_name, arguments = "inspect_system_health", {}
+            elif "audit" in lowered:
+                category = next((c for c in ("AUTH", "DOCUMENT", "QUERY", "WORKFLOW", "ADMIN") if c.lower() in lowered), None)
+                tool_name, arguments = "inspect_audit_logs", {"limit": 20, "category": category}
+            elif any(term in lowered for term in ("reindex", "re-index", "retry ingestion")):
+                match = UUID_PATTERN.search(normalized)
+                if not match:
+                    return {"status": "ADMIN_TOOL_RESULT", "message": "Provide the document ID to reindex it. You can copy it from Admin → Documents."}
+                tool_name, arguments = "trigger_reindex", {"document_id": match.group(1)}
+            elif any(term in lowered for term in ("document status", "indexing status", "status of document", "check document")):
+                match = UUID_PATTERN.search(normalized)
+                filename_match = re.search(r"[\w .()_-]+\.(?:pdf|docx|md|txt)\b", normalized, re.IGNORECASE)
+                identifier = match.group(1) if match else filename_match.group(0).strip() if filename_match else ""
+                if not identifier:
+                    return {"status": "ADMIN_TOOL_RESULT", "message": "Specify a document ID or filename so I can inspect its status."}
+                tool_name, arguments = "get_document_status", {"identifier": identifier}
+            else:
+                return {"status": "ADMIN_TOOL_RESULT", "message": "I can inspect system health, audit logs, document status, or trigger document reindexing. Use the Admin workspace for user and document management."}
 
         result = await self.execute_tool(session, user, tool_name, arguments)
         return {"status": "ADMIN_TOOL_RESULT", "message": self.format_response(tool_name, result)}

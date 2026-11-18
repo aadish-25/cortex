@@ -43,63 +43,93 @@ logger = logging.getLogger(__name__)
 # System Health Telemetry
 # ---------------------------------------------------------------------------
 
-async def inspect_system_health(session: AsyncSession) -> Dict[str, Any]:
-    """
-    Independently probes Postgres, Redis, and Qdrant.
-    Returns per-service status without raising — always returns a full dict.
-    Satisfies Decision D34: runtime Redis degradation observability.
-    """
-    health: Dict[str, Any] = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "services": {},
-    }
+import time
 
-    # --- Postgres ---
+_celery_probe_cache: Dict[str, Any] = {"ts": 0.0, "result": None}
+_CELERY_CACHE_TTL_SECONDS = 30.0
+
+
+async def _probe_postgres(session: AsyncSession) -> Dict[str, Any]:
     try:
         await session.execute(text("SELECT 1"))
-        health["services"]["postgres"] = {"status": "UP", "detail": "Reachable"}
-    except Exception as exc:
-        health["services"]["postgres"] = {"status": "DOWN", "detail": "Database connection failed"}
+        return {"status": "UP", "detail": "Reachable"}
+    except Exception:
+        return {"status": "DOWN", "detail": "Database connection failed"}
 
-    # --- Redis ---
+
+async def _probe_redis() -> Dict[str, Any]:
     try:
         redis = get_redis_client()
         if redis is None:
             from backend.db.redis import redis_manager
             redis = await redis_manager.get_client()
         if redis is not None:
-            await redis.ping()
-            health["services"]["redis"] = {"status": "UP", "detail": "Ping OK"}
-        else:
-            health["services"]["redis"] = {"status": "DEGRADED", "detail": "No Redis client configured"}
-    except Exception as exc:
-        health["services"]["redis"] = {"status": "DEGRADED", "detail": "Redis connection failed"}
+            await asyncio.wait_for(redis.ping(), timeout=1.0)
+            return {"status": "UP", "detail": "Ping OK"}
+        return {"status": "DEGRADED", "detail": "No Redis client configured"}
+    except Exception:
+        return {"status": "DEGRADED", "detail": "Redis connection failed"}
 
-    # --- Qdrant ---
+
+async def _probe_qdrant() -> Dict[str, Any]:
     try:
         from backend.db.qdrant import get_qdrant_client
         client = get_qdrant_client()
-        collections = client.get_collections()
+        collections = await asyncio.wait_for(asyncio.to_thread(client.get_collections), timeout=1.5)
         collection_names = [c.name for c in collections.collections]
-        health["services"]["qdrant"] = {
+        return {
             "status": "UP",
             "detail": f"{len(collection_names)} collection(s): {collection_names}",
         }
-    except Exception as exc:
-        health["services"]["qdrant"] = {"status": "DOWN", "detail": "Vector database connection failed"}
+    except Exception:
+        return {"status": "DOWN", "detail": "Vector database connection failed"}
 
-    # Celery worker inspection is bounded so an offline broker cannot stall the admin page.
+
+async def _probe_celery() -> Dict[str, Any]:
+    now = time.monotonic()
+    cached = _celery_probe_cache.get("result")
+    if cached is not None and (now - _celery_probe_cache["ts"]) < _CELERY_CACHE_TTL_SECONDS:
+        return dict(cached)
     try:
         from backend.worker.celery_app import celery_app
-        inspector = celery_app.control.inspect(timeout=1.0)
-        worker_pings = await asyncio.wait_for(asyncio.to_thread(inspector.ping), timeout=2.0)
+        inspector = celery_app.control.inspect(timeout=0.5)
+        worker_pings = await asyncio.wait_for(asyncio.to_thread(inspector.ping), timeout=0.8)
         worker_count = len(worker_pings or {})
-        health["services"]["celery"] = {
-            "status": "UP" if worker_count else "DEGRADED",
-            "detail": f"{worker_count} worker(s) responding" if worker_count else "No Celery workers responded",
+        result = {
+            "status": "UP" if worker_count else "DOWN",
+            "detail": f"{worker_count} worker(s) responding" if worker_count else "No Celery workers responding",
         }
     except Exception:
-        health["services"]["celery"] = {"status": "DEGRADED", "detail": "Worker inspection unavailable"}
+        result = {
+            "status": "DOWN",
+            "detail": "Celery worker inspection failed",
+        }
+    _celery_probe_cache["ts"] = now
+    _celery_probe_cache["result"] = result
+    return dict(result)
+
+
+async def inspect_system_health(session: AsyncSession) -> Dict[str, Any]:
+    """
+    Independently probes Postgres, Redis, Qdrant, and optional Celery workers in parallel.
+    Returns per-service status without raising — always returns a full dict.
+    Satisfies Decision D34: runtime Redis degradation observability.
+    """
+    pg_res, redis_res, qdrant_res, celery_res = await asyncio.gather(
+        _probe_postgres(session),
+        _probe_redis(),
+        _probe_qdrant(),
+        _probe_celery(),
+    )
+    health: Dict[str, Any] = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "services": {
+            "postgres": pg_res,
+            "redis": redis_res,
+            "qdrant": qdrant_res,
+            "celery": celery_res,
+        },
+    }
 
     # Provider key availability is reported separately from live infrastructure probes.
     health["llm_providers"] = {
@@ -109,7 +139,7 @@ async def inspect_system_health(session: AsyncSession) -> Dict[str, Any]:
         "meta": "CONFIGURED" if settings.META_API_KEY else "NOT_CONFIGURED",
     }
 
-    # Overall status: UP only if all infrastructure services are UP.
+    # Overall status: UP only when all infrastructure services are UP.
     all_statuses = [v["status"] for v in health["services"].values()]
     if all(s == "UP" for s in all_statuses):
         health["overall"] = "UP"

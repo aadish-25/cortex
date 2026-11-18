@@ -21,13 +21,18 @@ class LoginRequest(BaseModel):
     password: str
 
 
+import re
+import secrets
+from typing import Optional
+
+
 class RegisterRequest(BaseModel):
     name: str = Field(min_length=2, max_length=120)
-    username: str = Field(min_length=3, max_length=60, pattern=r"^[A-Za-z0-9_.-]+$")
     email: str = Field(min_length=5, max_length=254)
-    password: str = Field(min_length=10, max_length=128)
-    job_title: str = Field(min_length=2, max_length=120)
-    department: str = Field(min_length=2, max_length=80)
+    username: Optional[str] = Field(default=None, min_length=3, max_length=60, pattern=r"^[A-Za-z0-9_.-]+$")
+    password: Optional[str] = Field(default=None, min_length=10, max_length=128)
+    job_title: Optional[str] = Field(default=None, min_length=2, max_length=120)
+    department: Optional[str] = Field(default=None, min_length=2, max_length=80)
 
 
 class RegistrationResponse(BaseModel):
@@ -49,24 +54,30 @@ async def register_account(
     """Create an inactive employee account request for administrator approval.
 
     Public registration never grants a role or clearance and cannot access company
-    data until an administrator activates the account.
+    data until an administrator activates the account and assigns corporate details.
     """
     identifier = payload.email.strip().lower()
-    username = payload.username.strip()
+    if payload.username:
+        username = payload.username.strip()
+    else:
+        local_part = re.sub(r"[^A-Za-z0-9_.-]+", "_", identifier.split("@")[0]).strip("._-") or "user"
+        username = f"{local_part[:48]}_{secrets.token_hex(3)}"
+
     existing = await session.execute(
         select(User).where((User.username == username) | (User.email == identifier))
     )
     if existing.scalars().first():
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="An account with that username or email already exists")
 
+    raw_password = payload.password or secrets.token_urlsafe(24)
     user = User(
         name=payload.name.strip(),
         username=username,
         email=identifier,
-        job_title=payload.job_title.strip(),
-        hashed_password=hash_password(payload.password),
+        job_title=(payload.job_title or "Pending Assignment").strip(),
+        hashed_password=hash_password(raw_password),
         role=Role.EMPLOYEE,
-        department=payload.department.strip(),
+        department=(payload.department or "Unassigned").strip(),
         clearance_level=ClearanceLevel.PUBLIC,
         is_active=False,
         token_version=-1,

@@ -346,6 +346,7 @@ class GitHubService:
                     {
                         "number": issue.get("number"),
                         "title": issue.get("title"),
+                        "body": (issue.get("body") or "")[:600],
                         "author": issue.get("user", {}).get("login"),
                         "labels": [lbl.get("name") for lbl in issue.get("labels", [])],
                         "state": issue.get("state"),
@@ -366,6 +367,34 @@ class GitHubService:
                 "message": f"GitHub issue lookup error: {str(exc)}",
                 "issues": [],
             }
+
+    async def list_repo_files(
+        self,
+        repo: Optional[str] = None,
+        limit: int = 80,
+    ) -> List[str]:
+        """Lists repository file paths (via Git Trees API) to help map issues to source files."""
+        target_repo = repo or self.default_repo or "cortex-org/cortex"
+        if not self.is_configured:
+            return ["backend/services/auth_service.py", "backend/core/rate_limiter.py"]
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"{GITHUB_API_BASE}/repos/{target_repo}/git/trees/HEAD",
+                    headers=self._get_headers(),
+                    params={"recursive": "1"},
+                )
+                if resp.status_code != 200:
+                    return []
+                tree = resp.json().get("tree", [])
+                return [
+                    item["path"]
+                    for item in tree
+                    if item.get("type") == "blob" and item.get("path")
+                ][:limit]
+        except Exception as exc:
+            logger.warning("GitHub list_repo_files failed: %s", exc)
+            return []
 
 
 github_service = GitHubService()
