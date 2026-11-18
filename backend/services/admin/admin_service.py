@@ -51,7 +51,7 @@ async def inspect_system_health(session: AsyncSession) -> Dict[str, Any]:
 
     # --- Postgres ---
     try:
-        await session.exec(text("SELECT 1"))  # type: ignore[arg-type]
+        await session.execute(text("SELECT 1"))
         health["services"]["postgres"] = {"status": "UP", "detail": "Reachable"}
     except Exception as exc:
         health["services"]["postgres"] = {"status": "DOWN", "detail": str(exc)[:200]}
@@ -59,6 +59,9 @@ async def inspect_system_health(session: AsyncSession) -> Dict[str, Any]:
     # --- Redis ---
     try:
         redis = get_redis_client()
+        if redis is None:
+            from backend.db.redis import redis_manager
+            redis = await redis_manager.get_client()
         if redis is not None:
             await redis.ping()
             health["services"]["redis"] = {"status": "UP", "detail": "Ping OK"}
