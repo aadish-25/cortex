@@ -154,3 +154,12 @@ class RedisManager:
 
 
 redis_manager = RedisManager()
+
+
+
+def get_redis_client() -> Optional[aioredis.Redis]:
+    """
+    Returns the active Redis client from the global redis_manager, if connected.
+    Used for synchronous dependency injection or client checking.
+    """
+    return redis_manager._client
