@@ -19,7 +19,8 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import select
+from sqlalchemy import func
+from sqlmodel import col, select
 
 from backend.core.security import require_roles
 from backend.db.database import get_db
@@ -27,6 +28,7 @@ from backend.models.enums import AuditCategory, Role
 from backend.models.user import User
 from backend.models.document import Document
 from backend.models.query_quality import QueryQualityLog
+from backend.models.email_request import EmailChangeRequest
 from backend.services.admin.admin_service import (
     get_document_status,
     count_audit_logs,
@@ -378,3 +380,175 @@ async def token_analytics(
     Includes grand totals over the lookback period.
     """
     return await get_token_usage_analytics(session, days=days)
+
+
+# ---------------------------------------------------------------------------
+# Admin Notifications & Email Revision Workflow
+# ---------------------------------------------------------------------------
+
+@router.get("/notifications", summary="Live notification center for pending requests")
+async def get_admin_notifications(
+    session: AsyncSession = Depends(get_db),
+    _admin: User = Depends(_require_admin),
+) -> Dict[str, Any]:
+    """
+    Returns pending access requests and pending email revision requests.
+    Used by the admin notification bell and review banners.
+    """
+    # 1. Pending account self-registrations
+    pending_users_stmt = (
+        select(User)
+        .where(User.is_active == False, User.department == "Unassigned")
+        .order_by(col(User.created_at).desc())
+    )
+    res_users = await session.execute(pending_users_stmt)
+    pending_users = res_users.scalars().all()
+
+    # 2. Pending email revision requests
+    pending_emails_stmt = (
+        select(EmailChangeRequest)
+        .where(EmailChangeRequest.status == "pending")
+        .order_by(col(EmailChangeRequest.created_at).desc())
+    )
+    res_emails = await session.execute(pending_emails_stmt)
+    pending_emails = res_emails.scalars().all()
+
+    items = []
+    for u in pending_users:
+        items.append({
+            "id": str(u.id),
+            "type": "access_request",
+            "title": f"New access request: {u.name}",
+            "subtitle": f"Personal email: {u.email}",
+            "created_at": u.created_at.isoformat() if u.created_at else "",
+            "user_id": str(u.id),
+            "name": u.name,
+            "email": u.email,
+        })
+
+    for e in pending_emails:
+        items.append({
+            "id": str(e.id),
+            "type": "email_request",
+            "title": f"Email revision requested by {e.user_name}",
+            "subtitle": f"Change from {e.current_email} to {e.requested_email}" + (f" ({e.reason})" if e.reason else ""),
+            "created_at": e.created_at.isoformat() if e.created_at else "",
+            "request_id": str(e.id),
+            "user_id": str(e.user_id),
+            "current_email": e.current_email,
+            "requested_email": e.requested_email,
+            "reason": e.reason,
+        })
+
+    items.sort(key=lambda x: x["created_at"], reverse=True)
+
+    return {
+        "total_pending": len(pending_users) + len(pending_emails),
+        "pending_registrations_count": len(pending_users),
+        "pending_email_requests_count": len(pending_emails),
+        "items": items,
+    }
+
+
+@router.get("/email-requests", summary="List email revision requests")
+async def list_email_requests(
+    status_filter: Optional[str] = Query(default=None, alias="status"),
+    session: AsyncSession = Depends(get_db),
+    _admin: User = Depends(_require_admin),
+):
+    """List corporate email revision requests submitted by employees."""
+    stmt = select(EmailChangeRequest)
+    if status_filter:
+        stmt = stmt.where(EmailChangeRequest.status == status_filter)
+    stmt = stmt.order_by(col(EmailChangeRequest.created_at).desc())
+    res = await session.execute(stmt)
+    return res.scalars().all()
+
+
+@router.post("/email-requests/{request_id}/approve", summary="Approve an email revision request")
+async def approve_email_request(
+    request_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db),
+    admin: User = Depends(_require_admin),
+):
+    """Approve a pending corporate email change request and update the user's primary email."""
+    stmt = select(EmailChangeRequest).where(EmailChangeRequest.id == request_id)
+    res = await session.execute(stmt)
+    req = res.scalars().first()
+    if not req:
+        raise HTTPException(status_code=404, detail="Email change request not found")
+
+    if req.status != "pending":
+        raise HTTPException(status_code=400, detail=f"Request is already {req.status}")
+
+    user_stmt = select(User).where(User.id == req.user_id)
+    u_res = await session.execute(user_stmt)
+    target_user = u_res.scalars().first()
+    if not target_user:
+        raise HTTPException(status_code=404, detail="Target user account not found")
+
+    # Collision double-check
+    dup_stmt = select(User).where(User.email == req.requested_email, User.id != target_user.id)
+    if (await session.execute(dup_stmt)).scalars().first():
+        raise HTTPException(status_code=409, detail="Requested email is already in use by another user")
+
+    from datetime import datetime, timezone
+    target_user.email = req.requested_email
+    target_user.token_version = max(1, target_user.token_version) + 1
+    target_user.updated_at = datetime.now(timezone.utc)
+
+    req.status = "approved"
+    req.updated_at = datetime.now(timezone.utc)
+
+    session.add(target_user)
+    session.add(req)
+    await session.commit()
+    await session.refresh(req)
+
+    from backend.services.auth.audit_service import log_audit_event
+    await log_audit_event(
+        session=session,
+        event_tag="USER_EMAIL_REVISED_APPROVED",
+        category=AuditCategory.ADMIN,
+        user_id=admin.id,
+        status_code=200,
+        details=f"target_user_id={target_user.id}; old_email={req.current_email}; new_email={req.requested_email}",
+    )
+
+    return {"message": f"Approved email change. Corporate email updated to {req.requested_email}", "status": "approved"}
+
+
+@router.post("/email-requests/{request_id}/reject", summary="Reject an email revision request")
+async def reject_email_request(
+    request_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db),
+    admin: User = Depends(_require_admin),
+):
+    """Reject a pending corporate email change request."""
+    stmt = select(EmailChangeRequest).where(EmailChangeRequest.id == request_id)
+    res = await session.execute(stmt)
+    req = res.scalars().first()
+    if not req:
+        raise HTTPException(status_code=404, detail="Email change request not found")
+
+    if req.status != "pending":
+        raise HTTPException(status_code=400, detail=f"Request is already {req.status}")
+
+    from datetime import datetime, timezone
+    req.status = "rejected"
+    req.updated_at = datetime.now(timezone.utc)
+
+    session.add(req)
+    await session.commit()
+
+    from backend.services.auth.audit_service import log_audit_event
+    await log_audit_event(
+        session=session,
+        event_tag="USER_EMAIL_REVISED_REJECTED",
+        category=AuditCategory.ADMIN,
+        user_id=admin.id,
+        status_code=200,
+        details=f"target_user_id={req.user_id}; requested_email={req.requested_email}",
+    )
+
+    return {"message": "Email change request rejected", "status": "rejected"}

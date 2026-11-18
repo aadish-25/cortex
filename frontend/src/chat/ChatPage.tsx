@@ -9,6 +9,7 @@ import CortexLogo from '../components/CortexLogo'
 import { Modal } from '../components/Modal'
 import { SourcesDrawer } from '../components/SourcesDrawer'
 import { ThemeButton, useTheme } from '../components/ThemeToggle'
+import { AdminNotificationBell } from '../admin/AdminNotificationBell'
 
 interface MemoryEventData {
   actions: string[]
@@ -556,7 +557,7 @@ export function ChatPage() {
   const firstName = user?.name.split(' ')[0] || 'there'
 
   return <div className="chat-page">
-    <header className="chat-topbar"><div className="chat-topbar-left"><span className="topbar-context">WORKSPACE</span><span className="topbar-divider">/</span><span>{conversationId ? 'Conversation' : 'New conversation'}</span></div><div className="chat-topbar-right"><span className="secure-session"><span /> Private workspace</span><ThemeButton theme={theme} onToggle={toggleTheme} /></div></header>
+    <header className="chat-topbar"><div className="chat-topbar-left"><span className="topbar-context">WORKSPACE</span><span className="topbar-divider">/</span><span>{conversationId ? 'Conversation' : 'New conversation'}</span></div><div className="chat-topbar-right"><span className="secure-session"><span /> Private workspace</span><AdminNotificationBell /><ThemeButton theme={theme} onToggle={toggleTheme} /></div></header>
 
     <div className="chat-scroll" ref={scrollRef}>
       {isEmpty ? <div className="chat-empty-state"><div className="greeting-mark">c</div><p className="eyebrow">YOUR COMPANY KNOWLEDGE, CONNECTED</p><h1>{greeting()}, {firstName}.</h1><p className="empty-subtitle">What would you like to understand or get done today?</p><div className="prompt-grid">

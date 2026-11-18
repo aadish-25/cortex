@@ -49,7 +49,21 @@ export function AdminUsers() {
   const [form, setForm] = useState(emptyForm)
   const [applicantForm, setApplicantForm] = useState(emptyApplicantForm)
   const [saving, setSaving] = useState(false)
+  const [emailRequests, setEmailRequests] = useState<Record<string, { id: string; requested_email: string; reason?: string }>>({})
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const loadEmailRequests = async () => {
+    try {
+      const list = await api<Array<{ id: string; user_id: string; requested_email: string; reason?: string; status: string }>>('/api/v1/admin/email-requests?status=pending')
+      const map: Record<string, { id: string; requested_email: string; reason?: string }> = {}
+      for (const item of list) {
+        map[item.user_id] = { id: item.id, requested_email: item.requested_email, reason: item.reason }
+      }
+      setEmailRequests(map)
+    } catch {
+      // Ignore
+    }
+  }
 
   const pageRef = useRef(page)
   pageRef.current = page
@@ -71,9 +85,12 @@ export function AdminUsers() {
     const s = options?.statusFilter ?? statusFilterRef.current
     if (q.trim()) params.set('search', q.trim())
     if (r) params.set('role', r)
-    if (s) params.set('account_status', s)
+    if (s && s !== 'email_pending') params.set('account_status', s)
     try {
-      const data = await api<Page<User>>(`/api/v1/users/?${params}`)
+      const [data] = await Promise.all([
+        api<Page<User>>(`/api/v1/users/?${params}`),
+        loadEmailRequests(),
+      ])
       setResult(data)
       setPage(data.page)
     } catch (err) {
@@ -232,6 +249,27 @@ export function AdminUsers() {
     }
   }
 
+  async function approveEmailRevision(reqId: string, requestedEmail: string) {
+    try {
+      await api(`/api/v1/admin/email-requests/${reqId}/approve`, { method: 'POST' })
+      setToast(`Email updated to ${requestedEmail}`)
+      await Promise.all([load(page, undefined, true), loadEmailRequests()])
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not approve email request.')
+    }
+  }
+
+  async function rejectEmailRevision(reqId: string) {
+    if (!window.confirm('Reject this corporate email revision request?')) return
+    try {
+      await api(`/api/v1/admin/email-requests/${reqId}/reject`, { method: 'POST' })
+      setToast('Email revision request rejected.')
+      await loadEmailRequests()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not reject email request.')
+    }
+  }
+
   return (
     <div className="admin-page">
       <header className="page-header">
@@ -283,6 +321,7 @@ export function AdminUsers() {
               <option value="">All accounts</option>
               <option value="active">Active</option>
               <option value="pending">Pending approval</option>
+              <option value="email_pending">Email revision requested</option>
               <option value="inactive">Inactive</option>
             </select>
             <span className="count-label">{result?.total ?? 0} people</span>
@@ -306,9 +345,10 @@ export function AdminUsers() {
             </thead>
             <tbody>
               {loading && <tr><td colSpan={7} className="table-loading">Loading people…</td></tr>}
-              {!loading && result?.items.length === 0 && <tr><td colSpan={7} className="table-empty">No accounts found.</td></tr>}
-              {!loading && result?.items.map((person) => {
+              {!loading && (result?.items || []).filter((p) => statusFilter !== 'email_pending' || Boolean(emailRequests[p.id])).length === 0 && <tr><td colSpan={7} className="table-empty">No accounts found.</td></tr>}
+              {!loading && (result?.items || []).filter((p) => statusFilter !== 'email_pending' || Boolean(emailRequests[p.id])).map((person) => {
                 const isApplicant = !person.is_active && (person.department === 'Unassigned' || person.job_title === 'Pending Assignment')
+                const emailReq = emailRequests[person.id]
                 return (
                   <tr key={person.id}>
                     <td>
@@ -324,9 +364,16 @@ export function AdminUsers() {
                     <td><span className={`role-tag ${person.role.toLowerCase()}`}>{person.role}</span></td>
                     <td><span className={`clearance-tag ${person.clearance_level.toLowerCase()}`}>{person.clearance_level}</span></td>
                     <td>
-                      <span className={`status-pill ${isApplicant ? 'pending' : person.is_active ? 'active' : 'inactive'}`}>
-                        {isApplicant ? 'Awaiting approval' : person.is_active ? 'Active' : 'Inactive'}
-                      </span>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <span className={`status-pill ${isApplicant ? 'pending' : person.is_active ? 'active' : 'inactive'}`}>
+                          {isApplicant ? 'Awaiting approval' : person.is_active ? 'Active' : 'Inactive'}
+                        </span>
+                        {emailReq && (
+                          <span className="status-pill warning" style={{ fontSize: 10 }} title={`Requested: ${emailReq.requested_email}`}>
+                            Email Revision Requested
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td>{new Date(person.created_at).toLocaleDateString()}</td>
                     <td>
@@ -342,6 +389,16 @@ export function AdminUsers() {
                           </>
                         ) : (
                           <>
+                            {emailReq && (
+                              <button
+                                className="secondary-button small"
+                                style={{ minHeight: '30px', padding: '0 8px', fontSize: '11px', color: 'var(--primary)', borderColor: 'var(--primary-line)' }}
+                                onClick={() => void approveEmailRevision(emailReq.id, emailReq.requested_email)}
+                                title={`Approve new email: ${emailReq.requested_email}${emailReq.reason ? ` (${emailReq.reason})` : ''}`}
+                              >
+                                ✓ Accept {emailReq.requested_email}
+                              </button>
+                            )}
                             <button className="icon-button small" onClick={() => openEdit(person)} title="Edit account">
                               <Pencil size={15} />
                             </button>

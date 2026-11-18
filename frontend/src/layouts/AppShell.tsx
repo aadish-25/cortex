@@ -4,6 +4,7 @@ import { Menu, PanelLeftClose } from 'lucide-react'
 import { Sidebar } from './Sidebar'
 import { ThemeButton, useTheme } from '../components/ThemeToggle'
 import { MandatoryPasswordModal } from '../components/MandatoryPasswordModal'
+import { AdminNotificationBell } from '../admin/AdminNotificationBell'
 
 function pageBreadcrumb(pathname: string): { section: string; label: string } {
   if (pathname.startsWith('/admin/overview')) return { section: 'ADMINISTRATION', label: 'Overview' }
@@ -36,7 +37,8 @@ export function AppShell() {
             <span className="topbar-divider">/</span>
             <span>{crumb.label}</span>
           </div>
-          <div className="chat-topbar-right">
+          <div className="chat-topbar-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <AdminNotificationBell />
             <ThemeButton theme={theme} onToggle={toggleTheme} />
           </div>
         </header>
