@@ -94,6 +94,60 @@
       "format": "text",
       "summary": "Confidential HR and legal compliance directive covering mandatory constitution of the Internal Complaints Committee (ICC) under the POSH Act 2013 (Presiding Officer senior woman, 50% female representation, external NGO/legal member), strict 90-day inquiry completion SLA, 10-day report submission, Section 16 confidentiality rules (₹5,000 statutory penalty), interim relief measures, disciplinary actions, and whistleblower anti-retaliation shield.",
       "keywords": ["POSH Act 2013", "Internal Complaints Committee", "ICC", "90-day SLA", "sexual harassment", "zero-tolerance", "whistleblower", "anti-retaliation", "code of conduct", "confidential"]
+    },
+    {
+      "filename": "ENG_Deployment_Rollback_and_Canary_Release_SOP.md",
+      "title": "Engineering SOP: Deployment, Canary Release, and Automated Rollback Procedures",
+      "department": "Engineering",
+      "clearance_level": "Internal",
+      "format": "markdown",
+      "summary": "Defines the production deployment SOP including 4-stage canary release (5%, 25%, 50%, 100% traffic splits), automated rollback triggers (>0.5% HTTP 5xx errors for 2 consecutive minutes, p99 latency >800ms), Helm rollback commands, database migration backward-compatibility via Expand/Contract pattern, and mandatory RCA requirements (full RCA within 24 hours, post-mortem within 3 business days).",
+      "keywords": ["canary release", "deployment", "rollback", "helm rollback", "SOP", "5xx error rate", "p99 latency", "Expand/Contract", "RCA", "post-mortem", "Istio", "PagerDuty", "SRE", "blue-green"]
+    },
+    {
+      "filename": "ENG_Project_Apex_Banking_Client_Architecture_SOW.md",
+      "title": "Confidential SOW: Project Apex — Tier-1 Banking Client Integration Architecture",
+      "department": "Engineering",
+      "clearance_level": "Confidential",
+      "format": "markdown",
+      "summary": "Confidential Statement of Work for Project Apex — integration of Cortex Enterprise RAG Platform with a Tier-1 banking client. Covers AWS VPC peering, Apache Kafka at 15,000 TPS, mTLS, 99.99% uptime SLA, p95 latency <120ms, RPO <1 minute, RTO <15 minutes, milestone billing schedule, and RACI matrix.",
+      "keywords": ["Project Apex", "SOW", "banking client", "Kafka", "15000 TPS", "VPC peering", "mTLS", "99.99% uptime", "RPO 1 minute", "RTO 15 minutes", "AWS Mumbai", "confidential", "milestone billing", "RACI"]
+    },
+    {
+      "filename": "FIN_Vendor_Procurement_and_CAPEX_Approval_Policy.md",
+      "title": "Finance Policy: Vendor Procurement, Capital Expenditure Approval, and Competitive Bidding Framework",
+      "department": "Finance",
+      "clearance_level": "Internal",
+      "format": "markdown",
+      "summary": "Establishes vendor procurement, CapEx approval, and competitive bidding framework. Mandatory 3-quote rule for purchases above ₹2,00,000, formal RFP for >₹10,00,000. DoA matrix: Manager up to ₹5,00,000, VP up to ₹25,00,000, CFO above. GSTIN verification mandatory before payment, Net 30-45 payment terms.",
+      "keywords": ["vendor procurement", "CapEx", "OpEx", "3-quote rule", "2 lakh", "RFP", "DoA", "approval matrix", "CFO", "GSTIN", "GST invoice", "Net 45", "MSME", "competitive bidding"]
+    },
+    {
+      "filename": "HR_Annual_Performance_Appraisal_and_Variable_Pay_Cadence.md",
+      "title": "Human Resources Policy: Annual Performance Appraisal, 360-Degree Review, and Variable Pay Cadence",
+      "department": "HR",
+      "clearance_level": "Internal",
+      "format": "markdown",
+      "summary": "Annual performance cycle: H1 mid-year (July) and H2 year-end review (December/January). 5-point rating scale, bell-curve distribution (5% Outstanding, 15% Exceeds, 60% Meets, 15% NI, 5% UA). 360-degree feedback, 60-day PIP. Variable pay multiplier: 1.5x Outstanding, 1.2x Exceeds, 1.0x Meets, 0.0x NI/UA. Disbursed with March payroll.",
+      "keywords": ["performance appraisal", "PIP", "bell curve", "360-degree feedback", "variable pay", "bonus", "1.5x multiplier", "appraisal cycle", "July mid-year", "December review", "5-point rating", "60-day PIP", "March payroll"]
+    },
+    {
+      "filename": "SEC_SOC2_ISO27001_Audit_Readiness_and_Access_Review_Manual.md",
+      "title": "Security Governance Manual: SOC 2 Type II, ISO 27001, and Quarterly Access Review Procedures",
+      "department": "Engineering",
+      "clearance_level": "Confidential",
+      "format": "markdown",
+      "summary": "Confidential security governance manual covering SOC 2 Type II and ISO 27001:2022 compliance. Quarterly IAM access recertification every 90 days. Credential rotation: passwords 60 days, SSH keys 90 days. FIDO2/WebAuthn mandatory for privileged access. Incident severity: SEV-1 (>20% users, 15-min response), SEV-2 (1-hour), SEV-3 (4-hour). DR drills quarterly; RPO <1 min, RTO <15 min.",
+      "keywords": ["SOC 2 Type II", "ISO 27001", "IAM recertification", "90-day access review", "FIDO2", "WebAuthn", "credential rotation", "60 days", "90 days", "SEV-1", "incident response", "RPO", "RTO", "DR drill", "vulnerability management"]
+    },
+    {
+      "filename": "LEGAL_India_DPDP_Act_2023_Compliance_Framework.md",
+      "title": "Legal & Compliance Framework: India Digital Personal Data Protection (DPDP) Act 2023",
+      "department": "HR",
+      "clearance_level": "Internal",
+      "format": "markdown",
+      "summary": "Cortex's compliance framework under India DPDP Act 2023. Data Principal rights (access, correct, erase, withdraw consent), data retention schedule (payroll 8 years, HR files 7 years, candidate data 6 months), mandatory DPBI breach notification within 72 hours, DPO responsibilities, SDF readiness, cross-border transfer restrictions.",
+      "keywords": ["DPDP Act 2023", "Data Protection", "DPBI", "DPO", "Data Principal", "consent", "right to erase", "72-hour breach notification", "data retention", "India", "personal data", "SDF", "privacy", "compliance"]
     }
   ]
 }
