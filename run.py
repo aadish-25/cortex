@@ -259,9 +259,10 @@ def main() -> None:
     backend_proc = start_process(backend_cmd, "Backend (FastAPI)", "BACKEND", GREEN)
 
     # 4. Launch Celery worker and beat for document reindexing and scheduled reconciliation.
-    worker_cmd = [python_exe, "-m", "celery", "-A", "backend.worker.celery_app.celery_app", "worker", "--loglevel=INFO", "--pool=solo"]
-    beat_cmd = [python_exe, "-m", "celery", "-A", "backend.worker.celery_app.celery_app", "beat", "--loglevel=INFO"]
-    log("WORKER", CYAN, "Starting Celery worker for document indexing...")
+    worker_cmd = [python_exe, "-m", "celery", "-A", "backend.worker.celery_app.celery_app", "worker", "--loglevel=INFO", "--concurrency=1", "--pool=solo"]
+    schedule_file = BASE_DIR / "storage" / "celerybeat-schedule"
+    beat_cmd = [python_exe, "-m", "celery", "-A", "backend.worker.celery_app.celery_app", "beat", "--loglevel=INFO", "-s", str(schedule_file)]
+    log("WORKER", CYAN, "Starting Celery worker for document indexing (concurrency=1)...")
     start_process(worker_cmd, "Celery Worker", "WORKER", CYAN)
     log("WORKER", CYAN, "Starting Celery Beat for scheduled reconciliation...")
     start_process(beat_cmd, "Celery Beat", "BEAT", CYAN)
