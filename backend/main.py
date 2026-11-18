@@ -1,10 +1,13 @@
 from contextlib import asynccontextmanager
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.core.config import settings
 from backend.core.logging_config import setup_logging
 from backend.db.database import init_db
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -13,6 +16,13 @@ async def lifespan(app: FastAPI):
     setup_logging(mode="general")
     # Initialize database tables on startup
     await init_db()
+    # Ensure Qdrant user memories collection and payload indexes exist
+    try:
+        from backend.db.qdrant import get_qdrant_client, init_user_memories_collection
+        qdrant_client = get_qdrant_client()
+        init_user_memories_collection(qdrant_client)
+    except Exception as exc:
+        logger.warning("Qdrant user memories collection init skipped at startup: %s", exc)
     yield
 
 

@@ -24,6 +24,13 @@ from backend.models.ticket import Ticket
 from backend.models.audit import AuditLog
 from backend.models.token_usage import TokenUsageLog
 from backend.models.leave import LeaveBalance
+from backend.models.memory import (
+    MemoryCategory,
+    MemorySourceType,
+    MemoryStatus,
+    MemorySyncStatus,
+    UserMemory,
+)
 from backend.models.query_quality import QueryQualityLog
 
 __all__ = [
@@ -55,5 +62,10 @@ __all__ = [
     "AuditLog",
     "TokenUsageLog",
     "LeaveBalance",
+    "MemoryCategory",
+    "MemorySourceType",
+    "MemoryStatus",
+    "MemorySyncStatus",
+    "UserMemory",
     "QueryQualityLog",
 ]

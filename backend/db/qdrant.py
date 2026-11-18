@@ -97,11 +97,12 @@ def init_user_memories_collection(client: QdrantClient, collection_name: Optiona
         )
         logger.info("Created Qdrant user memories collection: %s", target_collection)
 
-    try:
-        client.create_payload_index(
-            collection_name=target_collection,
-            field_name="user_id",
-            field_schema=models.PayloadSchemaType.KEYWORD,
-        )
-    except UnexpectedResponse:
-        pass
+    for field_name in ("user_id", "category", "status"):
+        try:
+            client.create_payload_index(
+                collection_name=target_collection,
+                field_name=field_name,
+                field_schema=models.PayloadSchemaType.KEYWORD,
+            )
+        except UnexpectedResponse:
+            pass

@@ -25,7 +25,9 @@ from backend.core.config import settings
 from backend.db.redis import get_redis_client
 from backend.models.document import Document
 from backend.models.enums import AuditCategory, DocumentStatus
+from backend.models.memory import MemoryStatus, MemorySyncStatus, UserMemory
 from backend.services.auth.audit_service import log_audit_event
+from backend.services.memory.memory_store import memory_store
 
 logger = logging.getLogger(__name__)
 
@@ -138,13 +140,27 @@ async def run_reconciliation_sweeper(
             logger.warning("Reverse sweep Qdrant scroll failed: %s", exc)
             stats["errors"].append(f"Reverse sweep failed: {exc}")
 
+        # -------------------------------------------------------------------
+        # 3. User Memory Reconciliation (PostgreSQL user_memories <-> Qdrant)
+        # -------------------------------------------------------------------
+        mem_stats = await reconcile_user_memories(session, qdrant_client)
+        stats["memories_upserted"] = mem_stats["upserted"]
+        stats["memories_deleted"] = mem_stats["deleted"]
+        stats["memory_orphans_purged"] = mem_stats["orphans_purged"]
+        stats["errors"].extend(mem_stats["errors"])
+
         # Audit log the sweeper run
         await log_audit_event(
             session=session,
             event_tag="SWEEPER_RECONCILIATION_COMPLETED",
             category=AuditCategory.ADMIN,
             status_code=200,
-            details=f"Sweeper finished: scanned={stats['active_docs_scanned']}, flagged={stats['missing_docs_flagged']}, purged={stats['orphan_points_purged']}",
+            details=(
+                f"Sweeper finished: scanned={stats['active_docs_scanned']}, "
+                f"flagged={stats['missing_docs_flagged']}, purged={stats['orphan_points_purged']}, "
+                f"mem_upserted={stats['memories_upserted']}, mem_deleted={stats['memories_deleted']}, "
+                f"mem_orphans={stats['memory_orphans_purged']}"
+            ),
         )
 
         return stats
@@ -156,3 +172,79 @@ async def run_reconciliation_sweeper(
                 await redis.delete(RECONCILE_LOCK_KEY)
             except Exception as exc:
                 logger.warning("Failed to release reconcile lock '%s': %s", RECONCILE_LOCK_KEY, exc)
+
+
+async def reconcile_user_memories(
+    session: AsyncSession,
+    qdrant_client: QdrantClient,
+) -> Dict[str, Any]:
+    """
+    Reconciles PostgreSQL `user_memories` with Qdrant `cortex_user_memories`:
+      1. Retries rows with `sync_status = pending_upsert`.
+      2. Retries rows with `sync_status = pending_delete`.
+      3. Purges orphan vectors in Qdrant whose ID is not an active PostgreSQL memory.
+    """
+    mem_stats: Dict[str, Any] = {
+        "upserted": 0,
+        "deleted": 0,
+        "orphans_purged": 0,
+        "errors": [],
+    }
+    try:
+        # 1. Retry pending upserts
+        upsert_stmt = select(UserMemory).where(
+            UserMemory.sync_status == MemorySyncStatus.PENDING_UPSERT.value,
+            UserMemory.status == MemoryStatus.ACTIVE.value,
+        )
+        pending_upserts = list((await session.execute(upsert_stmt)).scalars().all())
+        for mem in pending_upserts:
+            if await memory_store._upsert_qdrant_point(qdrant_client, mem):
+                mem.sync_status = MemorySyncStatus.SYNCED.value
+                session.add(mem)
+                mem_stats["upserted"] += 1
+
+        # 2. Retry pending deletes (for deleted or superseded rows)
+        delete_stmt = select(UserMemory).where(
+            UserMemory.sync_status == MemorySyncStatus.PENDING_DELETE.value,
+        )
+        pending_deletes = list((await session.execute(delete_stmt)).scalars().all())
+        if pending_deletes:
+            point_ids = [str(m.id) for m in pending_deletes]
+            if await memory_store._delete_qdrant_points(qdrant_client, point_ids):
+                for mem in pending_deletes:
+                    mem.sync_status = MemorySyncStatus.SYNCED.value
+                    session.add(mem)
+                mem_stats["deleted"] = len(pending_deletes)
+
+        if mem_stats["upserted"] or mem_stats["deleted"]:
+            await session.commit()
+
+        # 3. Reverse pass: purge Qdrant points not active in PostgreSQL
+        if qdrant_client.collection_exists(settings.QDRANT_USER_MEMORIES_COLLECTION):
+            active_ids = {
+                str(mid)
+                for mid in (
+                    await session.execute(
+                        select(UserMemory.id).where(UserMemory.status == MemoryStatus.ACTIVE.value)
+                    )
+                ).scalars().all()
+            }
+            scroll_res = qdrant_client.scroll(
+                collection_name=settings.QDRANT_USER_MEMORIES_COLLECTION,
+                limit=500,
+                with_payload=True,
+                with_vectors=False,
+            )
+            points = scroll_res[0] if scroll_res else []
+            orphan_ids = [
+                str(p.id)
+                for p in points
+                if (p.payload or {}).get("user_id") and str(p.id) not in active_ids
+            ]
+            if orphan_ids and await memory_store._delete_qdrant_points(qdrant_client, orphan_ids):
+                mem_stats["orphans_purged"] = len(orphan_ids)
+    except Exception as exc:
+        logger.warning("User memory reconciliation failed: %s", exc)
+        mem_stats["errors"].append(f"Memory reconciliation failed: {exc}")
+
+    return mem_stats
