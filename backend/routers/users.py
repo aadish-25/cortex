@@ -7,10 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func
 from sqlmodel import col, or_, select
 
-from backend.core.security import hash_password, require_user_manager
+from backend.core.security import get_current_user, hash_password, require_user_manager
 from backend.db.database import get_db
 from backend.models.enums import AuditCategory, Role
 from backend.models.user import User, UserCreate, UserRead, UserUpdate
+from backend.models.email_request import EmailChangeRequest
 from backend.models.pagination import PaginatedResponse
 from backend.services.auth.audit_service import log_audit_event
 from backend.services.auth.auth_service import revoke_user_sessions
@@ -319,3 +320,96 @@ async def delete_user(
         details=f"target_user_id={user_id}; name={user.name}; email={user.email}",
     )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+from pydantic import BaseModel, Field
+
+
+class RequestEmailChangePayload(BaseModel):
+    requested_email: str = Field(min_length=5, max_length=254)
+    reason: Optional[str] = Field(default=None, max_length=500)
+
+
+@router.post("/request-email-change", status_code=status.HTTP_201_CREATED)
+async def request_email_change(
+    payload: RequestEmailChangePayload,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    """
+    Submit an official request to update assigned corporate email.
+    Reviewed by administrators.
+    """
+    clean_email = payload.requested_email.strip().lower()
+    if "@" not in clean_email or "." not in clean_email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid email format.",
+        )
+
+    if clean_email == current_user.email.lower():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Requested email is already your current email.",
+        )
+
+    dup = await session.execute(select(User).where(User.email == clean_email))
+    if dup.scalars().first():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This email address is already assigned to another user.",
+        )
+
+    existing_req = await session.execute(
+        select(EmailChangeRequest).where(
+            EmailChangeRequest.user_id == current_user.id,
+            EmailChangeRequest.status == "pending",
+        )
+    )
+    if existing_req.scalars().first():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="You already have a pending email revision request awaiting administrator review.",
+        )
+
+    req = EmailChangeRequest(
+        user_id=current_user.id,
+        user_name=current_user.name,
+        current_email=current_user.email,
+        requested_email=clean_email,
+        reason=payload.reason.strip() if payload.reason else None,
+        status="pending",
+    )
+    session.add(req)
+    await session.commit()
+    await session.refresh(req)
+
+    await log_audit_event(
+        session=session,
+        event_tag="USER_EMAIL_CHANGE_REQUESTED",
+        category=AuditCategory.AUTH,
+        user_id=current_user.id,
+        status_code=201,
+        details=f"current={current_user.email}; requested={clean_email}",
+    )
+
+    return {
+        "message": "Email revision request submitted. An administrator will review your request.",
+        "request_id": str(req.id),
+        "requested_email": req.requested_email,
+    }
+
+
+@router.get("/my-email-requests")
+async def get_my_email_requests(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    """List the current user's email revision requests."""
+    stmt = (
+        select(EmailChangeRequest)
+        .where(EmailChangeRequest.user_id == current_user.id)
+        .order_by(col(EmailChangeRequest.created_at).desc())
+    )
+    res = await session.execute(stmt)
+    return res.scalars().all()

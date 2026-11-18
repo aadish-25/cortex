@@ -1,12 +1,22 @@
-import { useEffect, useState } from 'react'
-import { ArrowLeft, ArrowUpRight, Brain, CheckCircle2, Lock, MessageSquare, Moon, ShieldCheck, Sun } from 'lucide-react'
+import { useEffect, useState, type FormEvent } from 'react'
+import { ArrowLeft, ArrowUpRight, Brain, CheckCircle2, Lock, Mail, MessageSquare, Moon, ShieldCheck, Sun, X } from 'lucide-react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { api } from '../api/client'
+import { api, ApiError } from '../api/client'
 import type { Conversation, Page } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
 import { useTheme } from '../components/ThemeToggle'
+import { Modal } from '../components/Modal'
 
 const CLEARANCE_ORDER = ['Public', 'Internal', 'Confidential'] as const
+
+interface EmailReq {
+  id: string
+  requested_email: string
+  current_email: string
+  reason?: string
+  status: string
+  created_at: string
+}
 
 export function ProfilePage() {
   const { user } = useAuth()
@@ -15,6 +25,29 @@ export function ProfilePage() {
   const { theme, toggleTheme } = useTheme()
   const [memoryCount, setMemoryCount] = useState<number | null>(null)
   const [conversationCount, setConversationCount] = useState<number | null>(null)
+  const [emailModalOpen, setEmailModalOpen] = useState(false)
+  const [requestedEmail, setRequestedEmail] = useState('')
+  const [reason, setReason] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [reqError, setReqError] = useState('')
+  const [toast, setToast] = useState('')
+  const [pendingReq, setPendingReq] = useState<EmailReq | null>(null)
+
+  useEffect(() => {
+    if (toast) {
+      const t = setTimeout(() => setToast(''), 3500)
+      return () => clearTimeout(t)
+    }
+  }, [toast])
+
+  const loadRequests = () => {
+    api<EmailReq[]>('/api/v1/users/my-email-requests')
+      .then((items) => {
+        const p = items.find((i) => i.status === 'pending')
+        setPendingReq(p || null)
+      })
+      .catch(() => undefined)
+  }
 
   useEffect(() => {
     if (location.hash === '#preferences') {
@@ -25,7 +58,29 @@ export function ProfilePage() {
   useEffect(() => {
     api<{ total: number }>('/api/v1/chat/memories?limit=1').then((r) => setMemoryCount(r.total)).catch(() => undefined)
     api<Page<Conversation>>('/api/v1/chat/conversations?page=1&page_size=1').then((r) => setConversationCount(r.total)).catch(() => undefined)
+    loadRequests()
   }, [])
+
+  async function handleEmailRequest(e: FormEvent) {
+    e.preventDefault()
+    setSubmitting(true)
+    setReqError('')
+    try {
+      await api('/api/v1/users/request-email-change', {
+        method: 'POST',
+        body: JSON.stringify({ requested_email: requestedEmail.trim(), reason: reason.trim() || undefined }),
+      })
+      setToast('Revision request submitted to administrators.')
+      setEmailModalOpen(false)
+      setRequestedEmail('')
+      setReason('')
+      loadRequests()
+    } catch (err) {
+      setReqError(err instanceof ApiError ? err.message : 'Could not submit request.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
 
   if (!user) return null
   const initials = user.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase()
@@ -38,7 +93,24 @@ export function ProfilePage() {
       <section className="panel profile-card">
         <div className="profile-hero"><span className="user-avatar profile-avatar">{initials}</span><div><h2>{user.name}</h2><p>{user.job_title}</p><span className="role-pill">{user.role}</span></div></div>
         <div className="profile-details">
-          <div><small>EMAIL</small><strong>{user.email}</strong></div>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+              <small>EMAIL</small>
+              {pendingReq ? (
+                <span className="status-pill pending" style={{ fontSize: 10 }}>Revision Pending ({pendingReq.requested_email})</span>
+              ) : (
+                <button
+                  type="button"
+                  className="secondary-button compact-button"
+                  style={{ fontSize: 11, padding: '2px 8px', height: 22 }}
+                  onClick={() => setEmailModalOpen(true)}
+                >
+                  Request revision
+                </button>
+              )}
+            </div>
+            <strong>{user.email}</strong>
+          </div>
           <div><small>USERNAME</small><strong>{user.username}</strong></div>
           <div><small>DEPARTMENT</small><strong>{user.department}</strong></div>
           <div><small>CLEARANCE</small><strong>{user.clearance_level}</strong></div>
@@ -109,5 +181,58 @@ export function ProfilePage() {
         </div>
       </section>
     </div>
+
+    {emailModalOpen && (
+      <Modal title="Request Corporate Email Change" onClose={() => setEmailModalOpen(false)}>
+        <form className="stack-form" onSubmit={handleEmailRequest}>
+          <p style={{ margin: 0, fontSize: 13, color: 'var(--muted)', lineHeight: 1.5 }}>
+            Corporate company email addresses are maintained by administrators. If your name spelling has changed or you require a different official address, submit a revision request below.
+          </p>
+
+          <div className="form-grid" style={{ gridTemplateColumns: '1fr', marginTop: 10 }}>
+            <label>
+              Current Email
+              <input value={user.email} disabled style={{ background: 'var(--surface-soft)', color: 'var(--muted)' }} />
+            </label>
+            <label>
+              Requested New Email *
+              <input
+                type="email"
+                value={requestedEmail}
+                onChange={(e) => setRequestedEmail(e.target.value)}
+                placeholder="e.g. firstname.lastname@cortex.com"
+                required
+              />
+            </label>
+            <label>
+              Reason for Request (Optional)
+              <input
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                placeholder="e.g. Spelling error or preferred naming convention"
+              />
+            </label>
+          </div>
+
+          {reqError && <div className="inline-error">{reqError}</div>}
+
+          <div className="modal-actions" style={{ marginTop: 16 }}>
+            <button type="button" className="secondary-button" onClick={() => setEmailModalOpen(false)} disabled={submitting}>
+              Cancel
+            </button>
+            <button type="submit" className="primary-button" disabled={submitting || !requestedEmail.trim()}>
+              {submitting ? 'Submitting…' : 'Submit Revision Request'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+    )}
+
+    {toast && (
+      <div className="toast-message">
+        <span>{toast}</span>
+        <button onClick={() => setToast('')}><X size={14} /></button>
+      </div>
+    )}
   </div>
 }

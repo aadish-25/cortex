@@ -32,6 +32,7 @@ from backend.models.memory import (
     UserMemory,
 )
 from backend.models.query_quality import QueryQualityLog
+from backend.models.email_request import EmailChangeRequest
 
 __all__ = [
     "Role",
@@ -68,4 +69,5 @@ __all__ = [
     "MemorySyncStatus",
     "UserMemory",
     "QueryQualityLog",
+    "EmailChangeRequest",
 ]
