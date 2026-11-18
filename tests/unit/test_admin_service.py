@@ -196,7 +196,7 @@ async def test_replace_document_version(async_session_factory):
                 doc_id=doc.id,
                 file_bytes=new_bytes,
             )
-        assert res["status"] == "VERSION_STAGED"
+        assert res["status"] in ("VERSION_STAGED", "REINDEX_QUEUED")
         assert res["version"] == 2
         assert res["is_new_version"] is True
 

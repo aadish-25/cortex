@@ -175,10 +175,20 @@ async def test_admin_document_status_and_reindex():
         assert status_data["id"] == doc_id
         assert status_data["filename"] == f"Admin_Test_{uid}.md"
 
-        # 4. Trigger reindex
+        # 4. Trigger reindex and clean up temporary test doc
         with patch("backend.worker.tasks.reindex_document_task.delay"):
             res_reindex = await client.post(f"/api/v1/admin/documents/{doc_id}/reindex", headers=headers)
             assert res_reindex.status_code == 202
             reindex_data = res_reindex.json()
             assert reindex_data["doc_id"] == doc_id
             assert reindex_data["status"] in ("REINDEX_QUEUED", "REINDEX_PENDING")
+
+        # Cleanup temporary UPDATING test doc so it never pollutes updating-policy probes
+        from backend.db.database import async_session
+        from backend.models.document import Document
+        from sqlmodel import select
+        async with async_session() as cleanup_session:
+            row = (await cleanup_session.execute(select(Document).where(Document.id == uuid.UUID(doc_id)))).scalar_one_or_none()
+            if row is not None:
+                await cleanup_session.delete(row)
+                await cleanup_session.commit()

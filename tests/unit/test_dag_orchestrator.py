@@ -96,13 +96,13 @@ async def test_decision_d9_updating_policy_probe_authorized_vs_unauthorized():
                 clearance_level=ClearanceLevel.CONFIDENTIAL,
             )
 
-            # Unauthorized user: Engineering Employee (Clearance: Internal)
+            # Unauthorized user: isolated non-HR Employee (Clearance: Internal)
             eng_emp = User(
-                username="emp_eng",
-                email="emp.eng@cortex.local",
+                username="emp_legal",
+                email="emp.legal@cortex.local",
                 hashed_password="x",
                 role=Role.EMPLOYEE,
-                department="Engineering",
+                department=f"IsolatedDept_{uuid.uuid4().hex[:6]}",
                 clearance_level=ClearanceLevel.INTERNAL,
             )
 
@@ -157,13 +157,15 @@ async def test_dag_strict_context_isolation():
             1: "Allowed daily per diem is ₹2,500.",
         }
 
-        output, cites = await execute_task(
-            task=task_action,
-            client=client,
-            session=session,
-            user=user,
-            scoped_upstream_context=upstream_context,
-        )
+        from unittest.mock import patch
+        with patch("backend.services.orchestration.action_guard.llm_service.is_configured", return_value=False):
+            output, cites = await execute_task(
+                task=task_action,
+                client=client,
+                session=session,
+                user=user,
+                scoped_upstream_context=upstream_context,
+            )
 
         assert output["status"] == "ACTION_DRAFT_PENDING"
         assert "₹2,500" in output["derived_context"]
