@@ -157,8 +157,16 @@ async def test_dag_strict_context_isolation():
             1: "Allowed daily per diem is ₹2,500.",
         }
 
-        from unittest.mock import patch
-        with patch("backend.services.orchestration.action_guard.llm_service.is_configured", return_value=False):
+        from unittest.mock import AsyncMock, patch
+        from backend.services.orchestration.action_guard import ActionFeasibilitySchema
+
+        approved = ActionFeasibilitySchema(
+            is_feasible=True,
+            department="Finance",
+            title="Corporate Travel Allowance Request",
+            description="Draft travel ticket using daily per diem allowance.",
+        )
+        with patch("backend.services.orchestration.action_guard.llm_service.generate_structured", new=AsyncMock(return_value=approved)):
             output, cites = await execute_task(
                 task=task_action,
                 client=client,
