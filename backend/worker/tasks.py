@@ -34,8 +34,8 @@ def reindex_document_task(self, doc_id_str: str) -> Dict[str, Any]:
         async with async_session() as session:
             doc_uuid = uuid.UUID(doc_id_str)
             stmt = select(Document).where(Document.id == doc_uuid)
-            res = await session.exec(stmt)
-            doc = res.first()
+            res = await session.execute(stmt)
+            doc = res.scalars().first()
             if not doc:
                 logger.error("Reindex task: Document %s not found in database", doc_id_str)
                 return {"status": "ERROR", "error": "Document not found"}

@@ -212,8 +212,8 @@ class AdminAgent:
                         .where(Document.filename == identifier)
                         .order_by(Document.version.desc())  # type: ignore[arg-type]
                     )
-                    res = await session.exec(stmt)
-                    doc = res.first()
+                    res = await session.execute(stmt)
+                    doc = res.scalars().first()
 
                 if not doc:
                     return {

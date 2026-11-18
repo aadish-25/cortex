@@ -70,8 +70,8 @@ async def run_reconciliation_sweeper(
             Document.is_live == True,  # noqa: E712
             Document.status == DocumentStatus.ACTIVE,
         )
-        res = await session.exec(stmt)
-        active_docs = list(res.all())
+        res = await session.execute(stmt)
+        active_docs = list(res.scalars().all())
         stats["active_docs_scanned"] = len(active_docs)
 
         active_doc_ids: Set[str] = {str(d.id) for d in active_docs}

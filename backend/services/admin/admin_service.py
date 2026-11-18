@@ -113,8 +113,8 @@ async def query_audit_logs(
     if category:
         stmt = stmt.where(AuditLog.category == category)
     stmt = stmt.offset(offset).limit(min(limit, 200))  # Hard cap at 200
-    result = await session.exec(stmt)
-    return list(result.all())
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
 
 
 # ---------------------------------------------------------------------------
@@ -127,8 +127,8 @@ async def get_document_status(session: AsyncSession, doc_id: uuid.UUID) -> Docum
     Raises ValueError if document not found (let router map to 404).
     """
     stmt = select(Document).where(Document.id == doc_id)
-    result = await session.exec(stmt)
-    doc = result.first()
+    result = await session.execute(stmt)
+    doc = result.scalars().first()
     if not doc:
         raise ValueError(f"Document {doc_id} not found")
     return doc
@@ -148,8 +148,8 @@ async def trigger_document_reindex(
     Returns job metadata.
     """
     stmt = select(Document).where(Document.id == doc_id)
-    result = await session.exec(stmt)
-    doc = result.first()
+    result = await session.execute(stmt)
+    doc = result.scalars().first()
     if not doc:
         raise ValueError(f"Document {doc_id} not found")
 
@@ -199,8 +199,8 @@ async def replace_document_version(
     a new version with the provided file bytes.
     """
     stmt = select(Document).where(Document.id == doc_id)
-    result = await session.exec(stmt)
-    doc = result.first()
+    result = await session.execute(stmt)
+    doc = result.scalars().first()
     if not doc:
         raise ValueError(f"Document {doc_id} not found")
 
@@ -252,7 +252,7 @@ async def get_query_analytics(
         .group_by(func.date(AuditLog.created_at))
         .order_by(func.date(AuditLog.created_at))
     )
-    result = await session.exec(stmt)
+    result = await session.execute(stmt)
     daily_rows = result.all()
 
     daily_counts = [{"day": str(row.day), "query_count": row.count} for row in daily_rows]
@@ -288,7 +288,7 @@ async def get_feedback_analytics(
         .where(MessageFeedback.created_at >= since)
         .group_by(MessageFeedback.is_thumbs_up)
     )
-    result = await session.exec(stmt)
+    result = await session.execute(stmt)
     rows = result.all()
 
     thumbs_up = next((r.count for r in rows if r.is_thumbs_up is True), 0)
@@ -332,7 +332,7 @@ async def get_token_usage_analytics(
         .group_by(TokenUsageLog.provider, TokenUsageLog.model)
         .order_by(func.sum(TokenUsageLog.total_tokens).desc())
     )
-    result = await session.exec(stmt)
+    result = await session.execute(stmt)
     rows = result.all()
 
     breakdown = [
