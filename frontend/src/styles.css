@@ -263,18 +263,23 @@ h1, h2, h3 { font-family: 'Manrope', 'DM Sans', sans-serif; letter-spacing: -.03
 .feedback-textarea { width: 100%; height: 85px; resize: none; padding: 10px 12px; font-size: 12px; background: var(--surface-soft); border: 1px solid var(--border); border-radius: 8px; color: var(--text); margin-bottom: 8px; box-sizing: border-box; }
 .feedback-notice { font-size: 10px; color: var(--muted); margin-bottom: 14px; line-height: 1.4; }
 .message-menu-wrap { position: relative; }
-.message-menu { position: absolute; z-index: 20; left: 0; bottom: 32px; width: 220px; padding: 5px; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; box-shadow: var(--shadow); }
-.message-menu button { display: flex; align-items: center; gap: 8px; width: 100%; height: 32px; padding: 0 8px; color: var(--text); background: transparent; border: 0; border-radius: 6px; font-size: 11px; text-align: left; cursor: pointer; }
-.message-menu button:hover { background: var(--surface-hover); }
-.message-menu button:disabled { opacity: .4; cursor: not-allowed; }
+.message-menu { position: absolute; z-index: 20; left: 0; bottom: 32px; min-width: 220px; padding: 6px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.16); }
+.message-menu-time { padding: 5px 10px 6px; font-size: 11px; font-weight: 500; color: var(--muted); border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+.message-menu .menu-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; height: 34px; padding: 0 10px; color: var(--text); background: transparent; border: 0; border-radius: 8px; font-size: 12px; font-weight: 500; text-align: left; cursor: pointer; transition: background 0.15s ease; }
+.message-menu .menu-item:hover, .message-menu .menu-item.active { background: var(--surface-hover); }
+.message-menu .menu-item:disabled { opacity: .4; cursor: not-allowed; }
+.message-menu .menu-item-left { display: flex; align-items: center; gap: 8px; }
+.message-menu .menu-chevron { color: var(--muted-2); margin-left: auto; }
 
-/* Regenerate dropdown */
-.regenerate-menu-section { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 6px; }
-.regenerate-input-wrap { display: flex; align-items: center; gap: 4px; background: var(--surface-soft); border: 1px solid var(--border); border-radius: 6px; padding: 2px 4px 2px 8px; margin: 4px 0 6px; }
-.regenerate-input { flex: 1; border: 0; background: transparent; color: var(--text); font-size: 11px; outline: none; height: 26px; }
-.regenerate-submit-btn { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 4px; border: 0; background: var(--primary); color: #fff; cursor: pointer; }
+/* Submenu Flyout */
+.menu-item-with-submenu { position: relative; }
+.message-submenu { position: absolute; left: calc(100% + 6px); bottom: -6px; min-width: 250px; padding: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 34px rgba(0, 0, 0, 0.22); z-index: 30; }
+.message-submenu .menu-divider { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
+.regenerate-input-wrap { display: flex; align-items: center; gap: 6px; background: var(--surface-soft); border: 1px solid var(--border); border-radius: 8px; padding: 3px 6px 3px 10px; margin-bottom: 4px; }
+.regenerate-input { flex: 1; border: 0; background: transparent; color: var(--text); font-size: 12px; outline: none; height: 28px; }
+.regenerate-input::placeholder { color: var(--muted-2); font-size: 11px; }
+.regenerate-submit-btn { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 6px; border: 0; background: var(--primary); color: #fff; cursor: pointer; transition: opacity 0.15s ease; }
 .regenerate-submit-btn:disabled { opacity: 0.35; cursor: not-allowed; }
-.regenerate-heading { font-size: 10px; color: var(--muted); padding: 0 4px; font-weight: 500; }
 .menu-dismiss { position: fixed; z-index: 15; inset: 0; background: transparent; border: 0; }
 .variant-switcher { display: inline-flex; align-items: center; gap: 3px; margin-left: 8px; color: var(--muted); font-size: 9px; }
 .variant-switcher .message-action { min-width: 22px; height: 22px; }

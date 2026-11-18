@@ -117,6 +117,14 @@ const FEEDBACK_CATEGORIES = [
   { id: 'OTHER', label: 'Other' },
 ]
 
+function formatMessageTime(createdAt?: string | Date): string {
+  if (!createdAt) return 'Today'
+  const date = new Date(createdAt)
+  const isToday = new Date().toDateString() === date.toDateString()
+  const timeStr = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  return isToday ? `Today, ${timeStr}` : `${date.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${timeStr}`
+}
+
 function AssistantMessage({ message, variants, allMessages, onOpenSources, onRegenerate, onFeedback, onSuggestion, feedbackState, busy }: {
   message: UIMessage
   variants: UIMessage[]
@@ -129,6 +137,7 @@ function AssistantMessage({ message, variants, allMessages, onOpenSources, onReg
   busy: boolean
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
+  const [submenuOpen, setSubmenuOpen] = useState(false)
   const [customInstruction, setCustomInstruction] = useState('')
   const [variantIndex, setVariantIndex] = useState(Math.max(0, variants.findIndex((item) => item.id === message.id)))
   useEffect(() => setVariantIndex(Math.max(0, variants.findIndex((item) => item.id === message.id))), [variants.length, message.id])
@@ -162,47 +171,85 @@ function AssistantMessage({ message, variants, allMessages, onOpenSources, onReg
           <button className={`message-action dislike-btn ${currentFeedback?.positive === false ? 'active' : ''}`} onClick={() => onFeedback(active, false)} title={currentFeedback?.positive === false ? 'Edit feedback' : 'Not helpful'} aria-label="Not helpful"><ThumbsDown size={14} /></button>
           <button className="message-action" onClick={() => void navigator.clipboard?.writeText(active.content)} title="Copy answer"><Copy size={14} /></button>
           <div className="message-menu-wrap">
-            <button className="message-action" onClick={() => setMenuOpen((value) => !value)} aria-label="More answer actions"><MoreHorizontal size={17} /></button>
-            {menuOpen && <><button className="menu-dismiss" onClick={() => setMenuOpen(false)} aria-label="Close actions" /><div className="message-menu">
-              <button disabled={!hasSources} onClick={() => { onOpenSources(active, undefined, sources); setMenuOpen(false) }}><FileSearch size={15} /> View sources</button>
-              <div className="regenerate-menu-section">
-                <span className="regenerate-heading">Ask to change response</span>
-                <div className="regenerate-input-wrap">
-                  <input
-                    type="text"
-                    className="regenerate-input"
-                    placeholder="e.g. shorten it, add detail..."
-                    value={customInstruction}
-                    onChange={(e) => setCustomInstruction(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault()
-                        if (customInstruction.trim() && !busy) {
-                          onRegenerate(active, customInstruction.trim())
-                          setMenuOpen(false)
-                          setCustomInstruction('')
-                        }
-                      }
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className="regenerate-submit-btn"
-                    disabled={!customInstruction.trim() || busy}
-                    onClick={() => {
-                      if (customInstruction.trim() && !busy) {
-                        onRegenerate(active, customInstruction.trim())
+            <button className="message-action" onClick={() => { setMenuOpen((value) => !value); setSubmenuOpen(false) }} aria-label="More answer actions"><MoreHorizontal size={17} /></button>
+            {menuOpen && <><button className="menu-dismiss" onClick={() => { setMenuOpen(false); setSubmenuOpen(false) }} aria-label="Close actions" /><div className="message-menu chatgpt-popover">
+              <div className="message-menu-time">{formatMessageTime(active.created_at)}</div>
+              <div className="menu-item-with-submenu" onMouseEnter={() => setSubmenuOpen(true)}>
+                <button
+                  type="button"
+                  className={`menu-item has-arrow ${submenuOpen ? 'active' : ''}`}
+                  onClick={() => setSubmenuOpen((v) => !v)}
+                >
+                  <span className="menu-item-left"><RefreshCw size={14} /> Regenerate response</span>
+                  <ChevronRight size={14} className="menu-chevron" />
+                </button>
+                {submenuOpen && (
+                  <div className="message-submenu">
+                    <div className="regenerate-input-wrap">
+                      <input
+                        type="text"
+                        className="regenerate-input"
+                        placeholder="Ask to change response"
+                        value={customInstruction}
+                        onChange={(e) => setCustomInstruction(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !e.shiftKey) {
+                            e.preventDefault()
+                            if (customInstruction.trim() && !busy) {
+                              onRegenerate(active, customInstruction.trim())
+                              setMenuOpen(false)
+                              setSubmenuOpen(false)
+                              setCustomInstruction('')
+                            }
+                          }
+                        }}
+                        autoFocus
+                      />
+                      <button
+                        type="button"
+                        className="regenerate-submit-btn"
+                        disabled={!customInstruction.trim() || busy}
+                        onClick={() => {
+                          if (customInstruction.trim() && !busy) {
+                            onRegenerate(active, customInstruction.trim())
+                            setMenuOpen(false)
+                            setSubmenuOpen(false)
+                            setCustomInstruction('')
+                          }
+                        }}
+                        title="Submit change request"
+                      >
+                        <ArrowUp size={12} />
+                      </button>
+                    </div>
+                    <hr className="menu-divider" />
+                    <button
+                      type="button"
+                      className="menu-item"
+                      disabled={busy}
+                      onClick={() => {
+                        onRegenerate(active)
                         setMenuOpen(false)
-                        setCustomInstruction('')
-                      }
-                    }}
-                    title="Regenerate with custom instruction"
-                  >
-                    <ArrowUp size={12} />
-                  </button>
-                </div>
-                <button disabled={busy} onClick={() => { onRegenerate(active); setMenuOpen(false) }}><RefreshCw size={15} /> Try again</button>
+                        setSubmenuOpen(false)
+                      }}
+                    >
+                      <span className="menu-item-left"><RefreshCw size={14} /> Try again</span>
+                    </button>
+                  </div>
+                )}
               </div>
+              <button
+                type="button"
+                className="menu-item"
+                disabled={!hasSources}
+                onClick={() => {
+                  onOpenSources(active, undefined, sources)
+                  setMenuOpen(false)
+                  setSubmenuOpen(false)
+                }}
+              >
+                <span className="menu-item-left"><FileSearch size={14} /> View sources</span>
+              </button>
             </div></>}
           </div>
           {allVariants.length > 1 && <div className="variant-switcher"><button className="message-action" disabled={variantIndex === 0} onClick={() => setVariantIndex((value) => value - 1)}><ChevronLeft size={14} /></button><span>{active.variant_index || variantIndex + 1} / {allVariants.length}</span><button className="message-action" disabled={variantIndex >= allVariants.length - 1} onClick={() => setVariantIndex((value) => value + 1)}><ChevronRight size={14} /></button></div>}
@@ -490,9 +537,9 @@ export function ChatPage() {
     }
   }
 
-  function submit(event: FormEvent) { event.preventDefault(); void sendMessage() }
+  function submit(event: FormEvent) { event.preventDefault(); if (!isStreaming) void sendMessage() }
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendMessage() }
+    if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); if (!isStreaming) void sendMessage() }
   }
 
   const grouped = useMemo(() => groupMessages(messages), [messages])
@@ -517,7 +564,7 @@ export function ChatPage() {
       </div>}
     </div>
 
-    <div className="composer-area"><form className="composer" onSubmit={submit}><textarea value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={handleKeyDown} placeholder="Ask about a policy, process, or anything in your workspace…" rows={2} disabled={isStreaming} /><div className="composer-footer"><div className="composer-footer-left"><div className="model-picker-wrap"><button type="button" className="model-picker" onClick={() => setShowModelPicker((value) => !value)}><span className="model-indicator" />{models.find((item) => item.id === selectedModel)?.name || 'Default model'}<ChevronDown size={14} /></button>{showModelPicker && <><button type="button" className="menu-dismiss" onClick={() => setShowModelPicker(false)} aria-label="Close model picker" /><div className="model-menu composer-model-menu">{models.map((model) => <button type="button" key={model.id} className={selectedModel === model.id ? 'selected' : ''} onClick={() => { setSelectedModel(model.id); setShowModelPicker(false) }}><span><strong>{model.name}</strong><small>{model.provider} · {model.badge}</small></span>{selectedModel === model.id && <Check size={15} />}</button>)}</div></>}</div><span className="composer-hint">Answers are grounded in sources you can access.</span></div><div className="composer-actions"><span className="keyboard-hint">Shift + Enter for a new line</span><button className="send-button" type="submit" disabled={!input.trim() || isStreaming} aria-label="Send message">{isStreaming ? <LoaderCircle className="spin" size={17} /> : <ArrowUp size={18} />}</button></div></div></form><p className="composer-disclaimer">Cortex can make mistakes. Check the cited source before acting on important information.</p></div>
+    <div className="composer-area"><form className="composer" onSubmit={submit}><textarea value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={handleKeyDown} placeholder="Ask about a policy, process, or anything in your workspace…" rows={2} /><div className="composer-footer"><div className="composer-footer-left"><div className="model-picker-wrap"><button type="button" className="model-picker" onClick={() => setShowModelPicker((value) => !value)}><span className="model-indicator" />{models.find((item) => item.id === selectedModel)?.name || 'Default model'}<ChevronDown size={14} /></button>{showModelPicker && <><button type="button" className="menu-dismiss" onClick={() => setShowModelPicker(false)} aria-label="Close model picker" /><div className="model-menu composer-model-menu">{models.map((model) => <button type="button" key={model.id} className={selectedModel === model.id ? 'selected' : ''} onClick={() => { setSelectedModel(model.id); setShowModelPicker(false) }}><span><strong>{model.name}</strong><small>{model.provider} · {model.badge}</small></span>{selectedModel === model.id && <Check size={15} />}</button>)}</div></>}</div><span className="composer-hint">Answers are grounded in sources you can access.</span></div><div className="composer-actions"><span className="keyboard-hint">Shift + Enter for a new line</span><button className="send-button" type="submit" disabled={!input.trim() || isStreaming} aria-label="Send message">{isStreaming ? <LoaderCircle className="spin" size={17} /> : <ArrowUp size={18} />}</button></div></div></form><p className="composer-disclaimer">Cortex can make mistakes. Check the cited source before acting on important information.</p></div>
 
     {sourceMessage && <SourcesDrawer open={Boolean(sourceMessage)} onClose={() => { setSourceMessage(null); setSourceNumber(null); setSourceData(null) }} citationValue={sourceData || resolveMessageCitations(sourceMessage, messages)} focusNumber={sourceNumber} />}
     {dislikeModalTarget && <Modal title="Share feedback" onClose={() => setDislikeModalTarget(null)}><form onSubmit={handleDislikeSubmit}>
