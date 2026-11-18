@@ -266,12 +266,17 @@ class ChatService:
             parent_message_id = user_message_record.id
             variant_index = 1
 
-            # 4. Turn 1 Auto-Titling (Non-blocking Fast LLM)
-            await memory_service.auto_title_conversation_if_needed(
-                session=session,
-                conversation=conversation,
-                first_user_prompt=user_message,
-            )
+            # 4. Turn 1 Auto-Titling (Truly non-blocking background task so Turn-1 TTFT is never delayed)
+            if not conversation.title or conversation.title == "New Conversation":
+                try:
+                    asyncio.create_task(
+                        memory_service.auto_title_conversation_background(
+                            conversation_id=conversation.id,
+                            first_user_prompt=user_message,
+                        )
+                    )
+                except Exception as title_err:
+                    logger.warning("Background auto-titling scheduling failed: %s", title_err)
 
         # 5. Retrieve Watermarked Sliding Window Context (Compact if active tokens > 8,000)
         # Emit a live 'Compacting' SSE status right BEFORE starting LLM compaction so the user

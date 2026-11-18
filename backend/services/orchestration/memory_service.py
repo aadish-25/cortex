@@ -389,6 +389,30 @@ class MemoryService:
         except Exception as e:
             logger.warning("Auto-titling failed: %s", e)
 
+    async def auto_title_conversation_background(
+        self,
+        conversation_id: uuid.UUID,
+        first_user_prompt: str,
+    ) -> None:
+        """Runs Turn-1 auto-titling in an isolated AsyncSession so Turn-1 TTFT is never blocked."""
+        from backend.db.database import async_session
+
+        try:
+            async with async_session() as bg_session:
+                res = await bg_session.execute(
+                    select(Conversation).where(Conversation.id == conversation_id)
+                )
+                conv = res.scalar_one_or_none()
+                if conv is None or (conv.title and conv.title != "New Conversation"):
+                    return
+                await self.auto_title_conversation_if_needed(
+                    session=bg_session,
+                    conversation=conv,
+                    first_user_prompt=first_user_prompt,
+                )
+        except Exception as exc:
+            logger.warning("Background auto-titling failed safely: %s", exc)
+
 
 # Global singleton instance
 memory_service = MemoryService()
