@@ -376,6 +376,25 @@ async def submit_message_feedback(
     }
 
 
+@router.delete("/feedback/{message_id}")
+async def delete_message_feedback(
+    message_id: uuid.UUID,
+    db_session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Allows removing previously submitted thumbs up or down evaluation."""
+    stmt = select(MessageFeedback).where(
+        MessageFeedback.message_id == message_id,
+        MessageFeedback.user_id == current_user.id,
+    )
+    res = await db_session.execute(stmt)
+    feedback = res.scalar_one_or_none()
+    if feedback:
+        await db_session.delete(feedback)
+        await db_session.commit()
+    return {"status": "success", "message": "Feedback removed"}
+
+
 @router.get("/available-models", response_model=List[ModelInfo])
 async def list_available_models(
     current_user: User = Depends(get_current_user),

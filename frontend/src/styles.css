@@ -248,9 +248,19 @@ h1, h2, h3 { font-family: 'Manrope', 'DM Sans', sans-serif; letter-spacing: -.03
 @keyframes typing { 0%, 60%, 100% { opacity: .35; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
 .message-toolbar { display: flex; align-items: center; justify-content: space-between; min-height: 31px; margin-top: 13px; }
 .message-toolbar-left { display: flex; align-items: center; gap: 3px; }
-.message-action { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; height: 27px; padding: 0 5px; color: var(--muted-2); background: transparent; border: 0; border-radius: 5px; }
+.message-action { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; height: 27px; padding: 0 5px; color: var(--muted-2); background: transparent; border: 0; border-radius: 5px; cursor: pointer; transition: color 0.15s ease, background 0.15s ease; }
 .message-action:hover { color: var(--text); background: var(--surface-hover); }
-.message-action:disabled { opacity: .35; }
+.message-action:disabled { opacity: .35; cursor: not-allowed; }
+.message-action.like-btn:hover, .message-action.like-btn.active { color: #10b981; background: rgba(16, 185, 129, 0.12); }
+.message-action.dislike-btn:hover, .message-action.dislike-btn.active { color: #ef4444; background: rgba(239, 68, 68, 0.12); }
+
+/* Share feedback modal */
+.feedback-categories { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.feedback-pill { padding: 6px 12px; border-radius: 9999px; font-size: 11px; font-weight: 500; color: var(--muted); background: var(--surface-soft); border: 1px solid var(--border); cursor: pointer; transition: all 0.15s ease; }
+.feedback-pill:hover { color: var(--text); border-color: var(--border-strong); background: var(--surface-hover); }
+.feedback-pill.selected { color: #fff; background: var(--primary); border-color: var(--primary); }
+.feedback-textarea { width: 100%; height: 85px; resize: none; padding: 10px 12px; font-size: 12px; background: var(--surface-soft); border: 1px solid var(--border); border-radius: 8px; color: var(--text); margin-bottom: 8px; box-sizing: border-box; }
+.feedback-notice { font-size: 10px; color: var(--muted); margin-bottom: 14px; line-height: 1.4; }
 .message-menu-wrap { position: relative; }
 .message-menu { position: absolute; z-index: 20; right: 0; bottom: 32px; width: 172px; padding: 5px; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; box-shadow: var(--shadow); }
 .message-menu button { display: flex; align-items: center; gap: 8px; width: 100%; height: 32px; padding: 0 8px; color: var(--text); background: transparent; border: 0; border-radius: 6px; font-size: 10px; text-align: left; }

@@ -5,6 +5,7 @@ import { api, streamChat, type StreamEvent } from '../api/client'
 import type { ChatMessage, CitationData, Conversation, Page } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
 import { CitationMarkdown } from '../components/CitationMarkdown'
+import { Modal } from '../components/Modal'
 import { SourcesDrawer } from '../components/SourcesDrawer'
 import { ThemeButton, useTheme } from '../components/ThemeToggle'
 
@@ -109,7 +110,17 @@ function CompactingTrace() {
   )
 }
 
-function AssistantMessage({ message, variants, allMessages, onOpenSources, onRegenerate, onFeedback, onSuggestion, feedbackSent, busy }: {
+const FEEDBACK_CATEGORIES = [
+  { id: 'VISUAL_BROKEN', label: 'Visual is unhelpful or broken' },
+  { id: 'INCORRECT_INCOMPLETE', label: 'Incorrect or incomplete' },
+  { id: 'NOT_WHAT_ASKED', label: 'Not what I asked for' },
+  { id: 'SLOW_BUGGY', label: 'Slow or buggy' },
+  { id: 'STYLE_TONE', label: 'Style or tone' },
+  { id: 'SAFETY_LEGAL', label: 'Safety or legal concern' },
+  { id: 'OTHER', label: 'Other' },
+]
+
+function AssistantMessage({ message, variants, allMessages, onOpenSources, onRegenerate, onFeedback, onSuggestion, currentFeedback, busy }: {
   message: UIMessage
   variants: UIMessage[]
   allMessages: UIMessage[]
@@ -117,7 +128,7 @@ function AssistantMessage({ message, variants, allMessages, onOpenSources, onReg
   onRegenerate: (message: UIMessage) => void
   onFeedback: (message: UIMessage, positive: boolean) => void
   onSuggestion: (suggestion: string) => void
-  feedbackSent: boolean
+  currentFeedback?: { positive: boolean; category?: string; comment?: string }
   busy: boolean
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
@@ -149,8 +160,8 @@ function AssistantMessage({ message, variants, allMessages, onOpenSources, onReg
       {!active.streaming && <div className="message-toolbar">
         <div className="message-toolbar-left">
           <button className="message-action" onClick={() => void navigator.clipboard?.writeText(active.content)} title="Copy answer"><Copy size={14} /></button>
-          <button className="message-action" disabled={feedbackSent} onClick={() => onFeedback(active, true)} title="Helpful"><ThumbsUp size={14} /></button>
-          <button className="message-action" disabled={feedbackSent} onClick={() => onFeedback(active, false)} title="Not helpful"><ThumbsDown size={14} /></button>
+          <button className={`message-action like-btn ${currentFeedback?.positive === true ? 'active' : ''}`} onClick={() => onFeedback(active, true)} title={currentFeedback?.positive === true ? 'Undo helpful' : 'Helpful'} aria-label="Helpful"><ThumbsUp size={14} /></button>
+          <button className={`message-action dislike-btn ${currentFeedback?.positive === false ? 'active' : ''}`} onClick={() => onFeedback(active, false)} title={currentFeedback?.positive === false ? 'Edit feedback' : 'Not helpful'} aria-label="Not helpful"><ThumbsDown size={14} /></button>
           {allVariants.length > 1 && <div className="variant-switcher"><button className="message-action" disabled={variantIndex === 0} onClick={() => setVariantIndex((value) => value - 1)}><ChevronLeft size={14} /></button><span>{active.variant_index || variantIndex + 1} / {allVariants.length}</span><button className="message-action" disabled={variantIndex >= allVariants.length - 1} onClick={() => setVariantIndex((value) => value + 1)}><ChevronRight size={14} /></button></div>}
         </div>
         <div className="message-menu-wrap">
@@ -217,7 +228,11 @@ export function ChatPage() {
   const [sourceNumber, setSourceNumber] = useState<number | null>(null)
   const [sourceData, setSourceData] = useState<CitationData | null>(null)
   const [toast, setToast] = useState('')
-  const [feedbackSent, setFeedbackSent] = useState<string[]>([])
+  const [feedbackState, setFeedbackState] = useState<Record<string, { positive: boolean; category?: string; comment?: string }>>({})
+  const [dislikeModalTarget, setDislikeModalTarget] = useState<UIMessage | null>(null)
+  const [dislikeCategory, setDislikeCategory] = useState<string>('')
+  const [dislikeComment, setDislikeComment] = useState<string>('')
+  const [submittingFeedback, setSubmittingFeedback] = useState<boolean>(false)
   const [showModelPicker, setShowModelPicker] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
@@ -340,12 +355,87 @@ export function ChatPage() {
   }
 
   async function feedback(message: UIMessage, positive: boolean) {
-    if (feedbackSent.includes(message.id)) return
+    const existing = feedbackState[message.id]
+    if (positive) {
+      if (existing?.positive === true) {
+        try {
+          await api(`/api/v1/chat/feedback/${message.id}`, { method: 'DELETE' })
+          setFeedbackState((current) => {
+            const next = { ...current }
+            delete next[message.id]
+            return next
+          })
+          setToast('Feedback removed')
+        } catch (error) {
+          setToast(error instanceof Error ? error.message : 'Could not remove feedback')
+        }
+      } else {
+        try {
+          await api('/api/v1/chat/feedback', {
+            method: 'POST',
+            body: JSON.stringify({ message_id: message.id, is_thumbs_up: true }),
+          })
+          setFeedbackState((current) => ({
+            ...current,
+            [message.id]: { positive: true },
+          }))
+          setToast('Marked as helpful')
+        } catch (error) {
+          setToast(error instanceof Error ? error.message : 'Could not submit feedback')
+        }
+      }
+    } else {
+      setDislikeModalTarget(message)
+      setDislikeCategory(existing?.positive === false ? (existing.category || '') : '')
+      setDislikeComment(existing?.positive === false ? (existing.comment || '') : '')
+    }
+  }
+
+  async function handleDislikeSubmit(event: FormEvent) {
+    event.preventDefault()
+    if (!dislikeModalTarget) return
+    setSubmittingFeedback(true)
     try {
-      await api('/api/v1/chat/feedback', { method: 'POST', body: JSON.stringify({ message_id: message.id, is_thumbs_up: positive }) })
-      setFeedbackSent((current) => [...current, message.id])
-      setToast('Feedback recorded')
-    } catch (error) { setToast(error instanceof Error ? error.message : 'Could not submit feedback') }
+      await api('/api/v1/chat/feedback', {
+        method: 'POST',
+        body: JSON.stringify({
+          message_id: dislikeModalTarget.id,
+          is_thumbs_up: false,
+          category: dislikeCategory || 'OTHER',
+          comment: dislikeComment.trim() || null,
+        }),
+      })
+      setFeedbackState((current) => ({
+        ...current,
+        [dislikeModalTarget.id]: {
+          positive: false,
+          category: dislikeCategory || 'OTHER',
+          comment: dislikeComment.trim(),
+        },
+      }))
+      setDislikeModalTarget(null)
+      setToast('Feedback submitted')
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'Could not submit feedback')
+    } finally {
+      setSubmittingFeedback(false)
+    }
+  }
+
+  async function handleUndoDislike() {
+    if (!dislikeModalTarget) return
+    try {
+      await api(`/api/v1/chat/feedback/${dislikeModalTarget.id}`, { method: 'DELETE' })
+      setFeedbackState((current) => {
+        const next = { ...current }
+        delete next[dislikeModalTarget.id]
+        return next
+      })
+      setDislikeModalTarget(null)
+      setToast('Feedback removed')
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'Could not remove feedback')
+    }
   }
 
   function submit(event: FormEvent) { event.preventDefault(); void sendMessage() }
@@ -369,8 +459,8 @@ export function ChatPage() {
         {historyPages > historyPage && <div className="older-messages"><button className="secondary-button" disabled={loadingHistory} onClick={() => conversationId && void loadMessages(conversationId, historyPage + 1, true)}>{loadingHistory ? 'Loading…' : 'Load earlier messages'}</button></div>}
         {grouped.map((group, index) => <div className="message-group" key={group.user?.id || group.standalone?.id || index}>
           {group.user && <div className="user-message"><div className="user-message-bubble">{group.user.content}</div></div>}
-          {group.assistants.length > 0 && <AssistantMessage key={group.user?.id || group.assistants[0].id} message={group.assistants[group.assistants.length - 1]} variants={group.assistants} allMessages={messages} onOpenSources={(message, number, customData) => { setSourceMessage(message); setSourceNumber(number ?? null); setSourceData(customData || resolveMessageCitations(message, messages)) }} onRegenerate={regenerate} onFeedback={feedback} onSuggestion={(suggestion) => void sendMessage(suggestion)} feedbackSent={feedbackSent.includes(group.assistants[group.assistants.length - 1].id)} busy={isStreaming} />}
-          {group.standalone && <AssistantMessage message={group.standalone} variants={[group.standalone]} allMessages={messages} onOpenSources={(message, number, customData) => { setSourceMessage(message); setSourceNumber(number ?? null); setSourceData(customData || resolveMessageCitations(message, messages)) }} onRegenerate={regenerate} onFeedback={feedback} onSuggestion={(suggestion) => void sendMessage(suggestion)} feedbackSent={feedbackSent.includes(group.standalone.id)} busy={isStreaming} />}
+          {group.assistants.length > 0 && <AssistantMessage key={group.user?.id || group.assistants[0].id} message={group.assistants[group.assistants.length - 1]} variants={group.assistants} allMessages={messages} onOpenSources={(message, number, customData) => { setSourceMessage(message); setSourceNumber(number ?? null); setSourceData(customData || resolveMessageCitations(message, messages)) }} onRegenerate={regenerate} onFeedback={feedback} onSuggestion={(suggestion) => void sendMessage(suggestion)} currentFeedback={feedbackState[group.assistants[group.assistants.length - 1].id]} busy={isStreaming} />}
+          {group.standalone && <AssistantMessage message={group.standalone} variants={[group.standalone]} allMessages={messages} onOpenSources={(message, number, customData) => { setSourceMessage(message); setSourceNumber(number ?? null); setSourceData(customData || resolveMessageCitations(message, messages)) }} onRegenerate={regenerate} onFeedback={feedback} onSuggestion={(suggestion) => void sendMessage(suggestion)} currentFeedback={feedbackState[group.standalone.id]} busy={isStreaming} />}
         </div>)}
       </div>}
     </div>
@@ -378,6 +468,19 @@ export function ChatPage() {
     <div className="composer-area"><form className="composer" onSubmit={submit}><textarea value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={handleKeyDown} placeholder="Ask about a policy, process, or anything in your workspace…" rows={1} disabled={isStreaming} /><div className="composer-footer"><span className="composer-hint">Answers are grounded in sources you can access.</span><div className="composer-actions"><span className="keyboard-hint">Shift + Enter for a new line</span><button className="send-button" type="submit" disabled={!input.trim() || isStreaming} aria-label="Send message">{isStreaming ? <LoaderCircle className="spin" size={17} /> : <ArrowUp size={18} />}</button></div></div></form><p className="composer-disclaimer">Cortex can make mistakes. Check the cited source before acting on important information.</p></div>
 
     {sourceMessage && <SourcesDrawer open={Boolean(sourceMessage)} onClose={() => { setSourceMessage(null); setSourceNumber(null); setSourceData(null) }} citationValue={sourceData || resolveMessageCitations(sourceMessage, messages)} focusNumber={sourceNumber} />}
+    {dislikeModalTarget && <Modal title="Share feedback" onClose={() => setDislikeModalTarget(null)}><form onSubmit={handleDislikeSubmit}>
+      <div className="feedback-categories">
+        {FEEDBACK_CATEGORIES.map((cat) => <button type="button" key={cat.id} className={`feedback-pill ${dislikeCategory === cat.id ? 'selected' : ''}`} onClick={() => setDislikeCategory(dislikeCategory === cat.id ? '' : cat.id)}>{cat.label}</button>)}
+      </div>
+      <textarea className="feedback-textarea" placeholder="Share details (optional)" value={dislikeComment} onChange={(e) => setDislikeComment(e.target.value)} />
+      <p className="feedback-notice">Your conversation will be included with your feedback to help improve Cortex.</p>
+      <div className="modal-actions">
+        {feedbackState[dislikeModalTarget.id]?.positive === false && <button type="button" className="secondary-button" onClick={() => void handleUndoDislike()}>Undo feedback</button>}
+        <button type="button" className="secondary-button" onClick={() => setDislikeModalTarget(null)}>Cancel</button>
+        <button type="submit" className="primary-button" disabled={submittingFeedback}>{submittingFeedback ? 'Submitting…' : 'Submit'}</button>
+      </div>
+    </form></Modal>}
+    {toast && <div className="toast-message"><span>{toast}</span><button onClick={() => setToast('')}><X size={14} /></button></div>}
     {toast && <div className="toast-message"><span>{toast}</span><button onClick={() => setToast('')}><X size={14} /></button></div>}
   </div>
 }
