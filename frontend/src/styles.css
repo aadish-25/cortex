@@ -630,3 +630,23 @@ button.suggestion-pill:hover { background: var(--primary-line); }
 /* Brand lockup: lowercase cortex */
 .brand-lockup span:last-child { font-size: 19px; letter-spacing: -.04em; }
 
+/* Intelligent Memory Management UI */
+.memory-header-actions { display: flex; align-items: center; gap: 10px; }
+.memory-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.memory-bulk-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0 10px; }
+.memory-select-box { display: grid; place-items: center; padding: 4px; color: var(--muted); background: transparent; border: 0; border-radius: 5px; cursor: pointer; }
+.memory-select-box:hover { color: var(--primary); background: var(--surface-hover); }
+.memory-meta-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 2px; }
+.memory-meta-row .category-tag { color: var(--primary); background: var(--primary-soft); text-transform: capitalize; }
+.memory-row.superseded { opacity: 0.72; }
+.memory-row { padding: 8px 0; }
+.muted-link { color: var(--muted); font-weight: 600; }
+.danger-text { color: var(--danger); }
+.danger-button { background: var(--danger); border-color: var(--danger); }
+.memory-event-card { display: flex; align-items: center; gap: 10px; margin: 10px 0; padding: 9px 12px; background: var(--primary-soft); border: 1px solid var(--primary-line); border-radius: 9px; font-size: 11px; }
+.memory-event-card svg { color: var(--primary); flex-shrink: 0; }
+.memory-event-copy { display: flex; flex: 1; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.memory-event-copy strong { color: var(--text); font-size: 11px; }
+.memory-event-copy span { color: var(--muted); font-size: 10px; }
+
+

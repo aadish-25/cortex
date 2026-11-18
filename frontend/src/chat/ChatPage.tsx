@@ -1,12 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowUp, BookOpen, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileSearch, LoaderCircle, MoreHorizontal, Plus, RefreshCw, Search, ShieldAlert, ThumbsDown, ThumbsUp, X } from 'lucide-react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import { ArrowUp, BookOpen, Brain, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileSearch, LoaderCircle, MoreHorizontal, Plus, RefreshCw, Search, ShieldAlert, ThumbsDown, ThumbsUp, X } from 'lucide-react'
 import { api, streamChat, type StreamEvent } from '../api/client'
 import type { ChatMessage, CitationData, Conversation, Page } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
 import { CitationMarkdown } from '../components/CitationMarkdown'
 import { SourcesDrawer } from '../components/SourcesDrawer'
 import { ThemeButton, useTheme } from '../components/ThemeToggle'
+
+interface MemoryEventData {
+  actions: string[]
+  saved?: Array<{ memory_id: string; text: string; category: string }>
+  updated?: Array<{ memory_id: string; text: string; category: string }>
+  deleted_count?: number
+  retrieved_count?: number
+  rejected?: Array<{ content: string; reason: string }>
+}
 
 interface UIMessage extends ChatMessage {
   streaming?: boolean
@@ -16,6 +25,7 @@ interface UIMessage extends ChatMessage {
   suggestions?: string[]
   actionDraft?: any
   corpusGap?: any
+  memoryEvent?: MemoryEventData
 }
 
 function greeting() {
@@ -107,6 +117,7 @@ function AssistantMessage({ message, variants, onOpenSources, onRegenerate, onFe
           : <div className="execution-trace"><span className="trace-pulse" />{latestStep.message}</div>
       )}
       {active.content ? <CitationMarkdown content={active.content} onOpenSource={(number) => onOpenSources(active, number)} /> : active.streaming ? <div className="typing-indicator"><i /><i /><i /></div> : null}
+      {active.memoryEvent && <MemoryEventCard event={active.memoryEvent} />}
       {active.corpusGap && <div className="corpus-gap-card"><ShieldAlert size={17} /><div><strong>Knowledge gap detected</strong><p>{active.corpusGap.message}</p><small>Confidence: {active.corpusGap.confidence} · Score: {active.corpusGap.top_reranker_score ?? '—'}</small></div></div>}
       {active.actionDraft && <ActionDraftCard draft={active.actionDraft} />}
       {active.error && <div className="inline-error">{active.error}</div>}
@@ -129,6 +140,27 @@ function AssistantMessage({ message, variants, onOpenSources, onRegenerate, onFe
       </div>}
     </div>
   </article>
+}
+
+function MemoryEventCard({ event }: { event: MemoryEventData }) {
+  const parts: string[] = []
+  if (event.saved?.length) parts.push(`Saved ${event.saved.length}`)
+  if (event.updated?.length) parts.push(`Updated ${event.updated.length}`)
+  if (event.deleted_count) parts.push(`Deleted ${event.deleted_count}`)
+  if (event.rejected?.length) parts.push(`Blocked ${event.rejected.length} (privacy policy)`)
+  if (!parts.length && event.retrieved_count !== undefined) parts.push(`Retrieved ${event.retrieved_count}`)
+  if (!parts.length) return null
+
+  return (
+    <div className="memory-event-card">
+      <Brain size={15} />
+      <div className="memory-event-copy">
+        <strong>Memory updated</strong>
+        <span>{parts.join(' · ')}</span>
+      </div>
+      <Link className="text-link" to="/memories">Manage</Link>
+    </div>
+  )
 }
 
 function ActionDraftCard({ draft }: { draft: any }) {
@@ -223,6 +255,8 @@ export function ChatPage() {
       patchMessage(assistantId, { suggestions: event.data?.suggestions || [] })
     } else if (event.type === 'action_card') {
       patchMessage(assistantId, { actionDraft: event.data })
+    } else if (event.type === 'memory_event') {
+      patchMessage(assistantId, { memoryEvent: event.data as MemoryEventData })
     } else if (event.type === 'corpus_gap') {
       patchMessage(assistantId, { corpusGap: event.data })
     } else if (event.type === 'interrupted') {
