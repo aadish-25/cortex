@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Activity, ArrowUpRight, Database, Gauge, MessageSquareText, ShieldCheck, ThumbsUp, Zap } from 'lucide-react'
 import { api } from '../api/client'
@@ -11,6 +11,30 @@ interface Tokens { grand_total_tokens: number; grand_total_cost_usd: number; by_
 
 // True stale-while-revalidate module cache: renders instantly on every revisit while refreshing live data in the background.
 const _cache: { health?: AdminHealth; quality?: Quality; queries?: QueryStats; feedback?: Feedback; tokens?: Tokens; loaded?: boolean } = {}
+
+function buildWeeklyChartData(dailyCounts: Array<{ day: string; query_count: number }> = []) {
+  const countMap = new Map<string, number>()
+  for (const item of dailyCounts) {
+    const key = (item.day || '').split('T')[0]
+    if (key) countMap.set(key, item.query_count)
+  }
+
+  const result: Array<{ day: string; label: string; count: number; isToday: boolean }> = []
+  const today = new Date()
+
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date()
+    d.setDate(today.getDate() - i)
+    const yyyy = d.getFullYear()
+    const mm = String(d.getMonth() + 1).padStart(2, '0')
+    const dd = String(d.getDate()).padStart(2, '0')
+    const key = `${yyyy}-${mm}-${dd}`
+    const count = countMap.get(key) || 0
+    const label = d.toLocaleDateString(undefined, { weekday: 'short' })
+    result.push({ day: key, label, count, isToday: i === 0 })
+  }
+  return result
+}
 
 export function AdminOverview() {
   const [health, setHealth] = useState<AdminHealth | null>(_cache.health ?? null)
@@ -57,7 +81,8 @@ export function AdminOverview() {
     { label: 'Fallback rate', value: quality ? `${quality.fallback_rate_percent}%` : '—', note: `${quality?.fallback_queries ?? 0} fallback answers`, icon: Activity },
     { label: 'Answer satisfaction', value: feedback?.satisfaction_percent == null ? '—' : `${feedback.satisfaction_percent}%`, note: `${feedback?.total_feedback ?? 0} ratings submitted`, icon: ThumbsUp },
   ]
-  const maxCount = Math.max(1, ...(queries?.daily_counts || []).map((item) => item.query_count))
+  const weeklyData = useMemo(() => buildWeeklyChartData(queries?.daily_counts), [queries?.daily_counts])
+  const maxCount = Math.max(1, ...weeklyData.map((item) => item.count))
   const serviceEntries = Object.entries(health?.services ?? {}) as Array<[string, AdminHealth['services'][string]]>
 
   function serviceBadgeClass(svc: AdminHealth['services'][string]) {
@@ -77,7 +102,7 @@ export function AdminOverview() {
         {health?.llm_providers && <div className="provider-health"><p className="eyebrow">MODEL PROVIDER KEYS</p><div>{Object.entries(health.llm_providers).map(([provider, status]) => <span key={provider} className={status === 'CONFIGURED' ? 'provider-configured' : 'provider-missing'}>{provider} · {status === 'CONFIGURED' ? 'Configured' : 'Not configured'}</span>)}</div></div>}
       </section>
       <section className="panel query-panel"><div className="panel-heading"><div><p className="eyebrow">ACTIVITY</p><h2>Query volume</h2></div><span className="panel-period">Last 7 days</span></div>
-        <div className="bar-chart">{(queries?.daily_counts || []).map((item) => <div className="bar-chart-col" key={item.day}><span className="bar-count">{item.query_count}</span><div className="bar-track"><div className="bar-fill" style={{ height: `${Math.max(4, (item.query_count / maxCount) * 100)}%` }} /></div><small>{new Date(item.day).toLocaleDateString(undefined, { weekday: 'short' })}</small></div>)}{!queries?.daily_counts.length && <div className="chart-empty">Query activity will appear here.</div>}</div>
+        <div className="bar-chart">{weeklyData.map((item) => <div className={`bar-chart-col ${item.isToday ? 'is-today' : ''}`} key={item.day}><span className="bar-count">{item.count > 0 ? item.count : '0'}</span><div className="bar-track"><div className={`bar-fill ${item.count === 0 ? 'zero-count' : ''}`} style={{ height: `${item.count > 0 ? Math.max(8, (item.count / maxCount) * 100) : 4}%` }} /></div><small className="bar-day">{item.label}</small></div>)}</div>
       </section>
     </div>
     <div className="overview-bottom-grid">
