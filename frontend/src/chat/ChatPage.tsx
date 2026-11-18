@@ -5,6 +5,7 @@ import { api, streamChat, type StreamEvent } from '../api/client'
 import type { ChatMessage, CitationData, Conversation, Page } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
 import { CitationMarkdown } from '../components/CitationMarkdown'
+import CortexLogo from '../components/CortexLogo'
 import { Modal } from '../components/Modal'
 import { SourcesDrawer } from '../components/SourcesDrawer'
 import { ThemeButton, useTheme } from '../components/ThemeToggle'
@@ -144,7 +145,7 @@ function AssistantMessage({ message, variants, allMessages, onOpenSources, onReg
   const isCompacting = Boolean(active.streaming && latestStep?.stage === 'compacting')
 
   return <article className="assistant-message">
-    <div className="assistant-avatar">c</div>
+    <div className="assistant-avatar"><CortexLogo size={27} /></div>
     <div className="assistant-message-content">
       <div className="assistant-author-row"><strong>Cortex</strong><span className="assistant-meta">{isCompacting ? 'Compacting' : active.streaming ? 'Working' : active.interrupted ? 'Partial response' : 'Answer'}</span></div>
       {latestStep && active.streaming && (
