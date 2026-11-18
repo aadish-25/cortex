@@ -39,6 +39,28 @@ function citationData(value?: CitationData | string[] | null): CitationData | nu
   return value
 }
 
+function resolveMessageCitations(target: UIMessage, allMessages: UIMessage[]): CitationData | null {
+  const direct = citationData(target.citations)
+  if (direct && (direct.citations?.length || direct.evidence_chunks?.length || Object.keys(direct.citation_map || {}).length)) {
+    return direct
+  }
+  const hasInlineCitation = /\[\d+\]/.test(target.content || '')
+  if (hasInlineCitation) {
+    const idx = allMessages.findIndex((m) => m.id === target.id)
+    const startIdx = idx >= 0 ? idx - 1 : allMessages.length - 1
+    for (let i = startIdx; i >= 0; i--) {
+      const prev = allMessages[i]
+      if (prev.sender === 'assistant') {
+        const prevData = citationData(prev.citations)
+        if (prevData && (prevData.citations?.length || prevData.evidence_chunks?.length || Object.keys(prevData.citation_map || {}).length)) {
+          return prevData
+        }
+      }
+    }
+  }
+  return direct
+}
+
 function groupMessages(messages: UIMessage[]) {
   const assistantByParent = new Map<string, UIMessage[]>()
   for (const message of messages) {
@@ -87,10 +109,11 @@ function CompactingTrace() {
   )
 }
 
-function AssistantMessage({ message, variants, onOpenSources, onRegenerate, onFeedback, onSuggestion, feedbackSent, busy }: {
+function AssistantMessage({ message, variants, allMessages, onOpenSources, onRegenerate, onFeedback, onSuggestion, feedbackSent, busy }: {
   message: UIMessage
   variants: UIMessage[]
-  onOpenSources: (message: UIMessage, number?: number) => void
+  allMessages: UIMessage[]
+  onOpenSources: (message: UIMessage, number?: number, customData?: CitationData | null) => void
   onRegenerate: (message: UIMessage) => void
   onFeedback: (message: UIMessage, positive: boolean) => void
   onSuggestion: (suggestion: string) => void
@@ -102,8 +125,8 @@ function AssistantMessage({ message, variants, onOpenSources, onRegenerate, onFe
   useEffect(() => setVariantIndex(Math.max(0, variants.findIndex((item) => item.id === message.id))), [variants.length, message.id])
   const allVariants = variants.length ? variants : [message]
   const active = allVariants[Math.min(variantIndex, allVariants.length - 1)] || message
-  const sources = citationData(active.citations)
-  const hasSources = Boolean(sources?.citations.length || sources?.evidence_chunks.length)
+  const sources = resolveMessageCitations(active, allMessages)
+  const hasSources = Boolean(sources?.citations?.length || sources?.evidence_chunks?.length || Object.keys(sources?.citation_map || {}).length)
   const latestStep = active.steps && active.steps.length > 0 ? active.steps[active.steps.length - 1] : null
   const isCompacting = Boolean(active.streaming && latestStep?.stage === 'compacting')
 
@@ -116,7 +139,7 @@ function AssistantMessage({ message, variants, onOpenSources, onRegenerate, onFe
           ? <CompactingTrace />
           : <div className="execution-trace"><span className="trace-pulse" />{latestStep.message}</div>
       )}
-      {active.content ? <CitationMarkdown content={active.content} onOpenSource={(number) => onOpenSources(active, number)} /> : active.streaming ? <div className="typing-indicator"><i /><i /><i /></div> : null}
+      {active.content ? <CitationMarkdown content={active.content} onOpenSource={(number) => onOpenSources(active, number, sources)} /> : active.streaming ? <div className="typing-indicator"><i /><i /><i /></div> : null}
       {active.memoryEvent && <MemoryEventCard event={active.memoryEvent} />}
       {active.corpusGap && <div className="corpus-gap-card"><ShieldAlert size={17} /><div><strong>Knowledge gap detected</strong><p>{active.corpusGap.message}</p><small>Confidence: {active.corpusGap.confidence} · Score: {active.corpusGap.top_reranker_score ?? '—'}</small></div></div>}
       {active.actionDraft && <ActionDraftCard draft={active.actionDraft} />}
@@ -133,7 +156,7 @@ function AssistantMessage({ message, variants, onOpenSources, onRegenerate, onFe
         <div className="message-menu-wrap">
           <button className="message-action" onClick={() => setMenuOpen((value) => !value)} aria-label="More answer actions"><MoreHorizontal size={17} /></button>
           {menuOpen && <><button className="menu-dismiss" onClick={() => setMenuOpen(false)} aria-label="Close actions" /><div className="message-menu">
-            <button disabled={!hasSources} onClick={() => { onOpenSources(active); setMenuOpen(false) }}><FileSearch size={15} /> View sources</button>
+            <button disabled={!hasSources} onClick={() => { onOpenSources(active, undefined, sources); setMenuOpen(false) }}><FileSearch size={15} /> View sources</button>
             <button disabled={busy} onClick={() => { onRegenerate(active); setMenuOpen(false) }}><RefreshCw size={15} /> Regenerate answer</button>
           </div></>}
         </div>
@@ -192,6 +215,7 @@ export function ChatPage() {
   const [models, setModels] = useState<Array<{ id: string; name: string; provider: string; badge: string }>>([])
   const [sourceMessage, setSourceMessage] = useState<UIMessage | null>(null)
   const [sourceNumber, setSourceNumber] = useState<number | null>(null)
+  const [sourceData, setSourceData] = useState<CitationData | null>(null)
   const [toast, setToast] = useState('')
   const [feedbackSent, setFeedbackSent] = useState<string[]>([])
   const [showModelPicker, setShowModelPicker] = useState(false)
@@ -345,15 +369,15 @@ export function ChatPage() {
         {historyPages > historyPage && <div className="older-messages"><button className="secondary-button" disabled={loadingHistory} onClick={() => conversationId && void loadMessages(conversationId, historyPage + 1, true)}>{loadingHistory ? 'Loading…' : 'Load earlier messages'}</button></div>}
         {grouped.map((group, index) => <div className="message-group" key={group.user?.id || group.standalone?.id || index}>
           {group.user && <div className="user-message"><div className="user-message-bubble">{group.user.content}</div></div>}
-          {group.assistants.length > 0 && <AssistantMessage key={group.user?.id || group.assistants[0].id} message={group.assistants[group.assistants.length - 1]} variants={group.assistants} onOpenSources={(message, number) => { setSourceMessage(message); setSourceNumber(number ?? null) }} onRegenerate={regenerate} onFeedback={feedback} onSuggestion={(suggestion) => void sendMessage(suggestion)} feedbackSent={feedbackSent.includes(group.assistants[group.assistants.length - 1].id)} busy={isStreaming} />}
-          {group.standalone && <AssistantMessage message={group.standalone} variants={[group.standalone]} onOpenSources={(message, number) => { setSourceMessage(message); setSourceNumber(number ?? null) }} onRegenerate={regenerate} onFeedback={feedback} onSuggestion={(suggestion) => void sendMessage(suggestion)} feedbackSent={feedbackSent.includes(group.standalone.id)} busy={isStreaming} />}
+          {group.assistants.length > 0 && <AssistantMessage key={group.user?.id || group.assistants[0].id} message={group.assistants[group.assistants.length - 1]} variants={group.assistants} allMessages={messages} onOpenSources={(message, number, customData) => { setSourceMessage(message); setSourceNumber(number ?? null); setSourceData(customData || resolveMessageCitations(message, messages)) }} onRegenerate={regenerate} onFeedback={feedback} onSuggestion={(suggestion) => void sendMessage(suggestion)} feedbackSent={feedbackSent.includes(group.assistants[group.assistants.length - 1].id)} busy={isStreaming} />}
+          {group.standalone && <AssistantMessage message={group.standalone} variants={[group.standalone]} allMessages={messages} onOpenSources={(message, number, customData) => { setSourceMessage(message); setSourceNumber(number ?? null); setSourceData(customData || resolveMessageCitations(message, messages)) }} onRegenerate={regenerate} onFeedback={feedback} onSuggestion={(suggestion) => void sendMessage(suggestion)} feedbackSent={feedbackSent.includes(group.standalone.id)} busy={isStreaming} />}
         </div>)}
       </div>}
     </div>
 
     <div className="composer-area"><form className="composer" onSubmit={submit}><textarea value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={handleKeyDown} placeholder="Ask about a policy, process, or anything in your workspace…" rows={1} disabled={isStreaming} /><div className="composer-footer"><span className="composer-hint">Answers are grounded in sources you can access.</span><div className="composer-actions"><span className="keyboard-hint">Shift + Enter for a new line</span><button className="send-button" type="submit" disabled={!input.trim() || isStreaming} aria-label="Send message">{isStreaming ? <LoaderCircle className="spin" size={17} /> : <ArrowUp size={18} />}</button></div></div></form><p className="composer-disclaimer">Cortex can make mistakes. Check the cited source before acting on important information.</p></div>
 
-    {sourceMessage && <SourcesDrawer open={Boolean(sourceMessage)} onClose={() => { setSourceMessage(null); setSourceNumber(null) }} citationValue={citationData(sourceMessage.citations)} focusNumber={sourceNumber} />}
+    {sourceMessage && <SourcesDrawer open={Boolean(sourceMessage)} onClose={() => { setSourceMessage(null); setSourceNumber(null); setSourceData(null) }} citationValue={sourceData || resolveMessageCitations(sourceMessage, messages)} focusNumber={sourceNumber} />}
     {toast && <div className="toast-message"><span>{toast}</span><button onClick={() => setToast('')}><X size={14} /></button></div>}
   </div>
 }
