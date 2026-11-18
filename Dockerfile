@@ -14,4 +14,4 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY backend ./backend
 COPY data ./data
 
-CMD ["celery", "-A", "backend.worker.celery_app", "worker", "--loglevel=info"]
+CMD ["celery", "-A", "backend.worker.celery_app", "worker", "--beat", "-s", "/app/storage/celerybeat-schedule", "--concurrency=1", "--max-tasks-per-child=50", "--loglevel=info"]

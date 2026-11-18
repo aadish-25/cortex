@@ -259,13 +259,24 @@ def main() -> None:
     backend_proc = start_process(backend_cmd, "Backend (FastAPI)", "BACKEND", GREEN)
 
     # 4. Launch Celery worker and beat for document reindexing and scheduled reconciliation.
-    worker_cmd = [python_exe, "-m", "celery", "-A", "backend.worker.celery_app.celery_app", "worker", "--loglevel=INFO", "--concurrency=1", "--pool=solo"]
     schedule_file = BASE_DIR / "storage" / "celerybeat-schedule"
-    beat_cmd = [python_exe, "-m", "celery", "-A", "backend.worker.celery_app.celery_app", "beat", "--loglevel=INFO", "-s", str(schedule_file)]
-    log("WORKER", CYAN, "Starting Celery worker for document indexing (concurrency=1)...")
-    start_process(worker_cmd, "Celery Worker", "WORKER", CYAN)
-    log("WORKER", CYAN, "Starting Celery Beat for scheduled reconciliation...")
-    start_process(beat_cmd, "Celery Beat", "BEAT", CYAN)
+    if sys.platform == "win32":
+        # Windows does not support POSIX fork(), requiring Beat to run as a separate process.
+        worker_cmd = [python_exe, "-m", "celery", "-A", "backend.worker.celery_app.celery_app", "worker", "--loglevel=INFO", "--concurrency=1", "--pool=solo"]
+        beat_cmd = [python_exe, "-m", "celery", "-A", "backend.worker.celery_app.celery_app", "beat", "--loglevel=INFO", "-s", str(schedule_file)]
+        log("WORKER", CYAN, "Starting Celery worker on Windows (concurrency=1, pool=solo)...")
+        start_process(worker_cmd, "Celery Worker", "WORKER", CYAN)
+        log("BEAT", CYAN, "Starting Celery Beat in separate process (Windows compatibility)...")
+        start_process(beat_cmd, "Celery Beat", "BEAT", CYAN)
+    else:
+        # Linux/macOS natively supports embedded Celery Beat (-B / --beat), saving memory.
+        worker_cmd = [
+            python_exe, "-m", "celery", "-A", "backend.worker.celery_app.celery_app", "worker",
+            "--beat", "-s", str(schedule_file),
+            "--loglevel=INFO", "--concurrency=1"
+        ]
+        log("WORKER", CYAN, "Starting unified Celery worker with embedded Beat scheduler (concurrency=1)...")
+        start_process(worker_cmd, "Celery Worker (with Beat)", "WORKER", CYAN)
 
     # 5. Launch the React/Vite frontend.
     log("FRONTEND", MAGENTA, "Starting React frontend on http://localhost:5173...")
