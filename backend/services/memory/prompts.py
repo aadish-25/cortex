@@ -142,7 +142,7 @@ What TO retain (durable, cross-conversation value):
 - Stable technology preferences
 - Long-term learning goals and career objectives
 - Recurring workflows and important decisions
-- Base office / work location
+- Base office / work location and notable workplace relationships (e.g., official mentor, team/guild)
 
 What NOT to store (return empty actions list):
 - Temporary one-off questions, lookups, or tasks
@@ -150,7 +150,7 @@ What NOT to store (return empty actions list):
 - Random facts with no future personalization value
 - Information already captured identically by an existing memory
 - Credentials, passwords, API keys, tokens, financial account details
-- Sensitive personal info: health/medical conditions, sexual info, private info about children, unnecessary details about third parties
+- Sensitive personal info: health/medical conditions, sexual info, private info about children, private gossip/sensitive info about unrelated third parties (workplace relationships like the user's official mentor or team are fine to retain)
 
 Conflict Resolution Principles:
 1. If the new fact is already represented by an existing memory with the same meaning, emit NOOP (or omit it).

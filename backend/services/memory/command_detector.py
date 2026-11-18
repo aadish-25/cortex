@@ -11,8 +11,8 @@ class ExplicitCommandSignal:
 
 _EXPLICIT_ADD_PATTERNS = [
     re.compile(r"\bremember\s+(?:that|this|me)\b", re.IGNORECASE),
-    re.compile(r"\badd+\s+(?:this|that|it|.+?)?\s*to\s+(?:my\s+)?(?:long[- ]term\s+)?memo?r(?:y|ies)\b", re.IGNORECASE),
-    re.compile(r"\bsave\s+(?:this|that|it|.+?)?\s*(?:to|in|as)\s+(?:my\s+|a\s+)?(?:long[- ]term\s+)?(?:memo?r(?:y|ies)|preference)\b", re.IGNORECASE),
+    re.compile(r"\badd+\s+(?:this|that|it|.+?)?\s*to\s+(?:my\s+)?(?:long[- ]term\s+)?(?:memo?r(?:y|ies)|(?:[\w-]+\s+)?preferences?)\b", re.IGNORECASE),
+    re.compile(r"\bsave\s+(?:this|that|it|.+?)?\s*(?:to|in|as)\s+(?:my\s+|a\s+)?(?:long[- ]term\s+)?(?:memo?r(?:y|ies)|(?:[\w-]+\s+)?preferences?)\b", re.IGNORECASE),
     re.compile(r"\bnote\s+that\s+i\b", re.IGNORECASE),
     re.compile(r"\bkeep\s+in\s+mind\s+(?:that\s+)?i\b", re.IGNORECASE),
     re.compile(r"\bstore\s+(?:this|that)\s+in\s+(?:my\s+)?memo?r(?:y|ies)\b", re.IGNORECASE),

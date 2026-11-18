@@ -246,34 +246,121 @@ async def test_submit_message_feedback(auth_headers, test_user):
 
 @pytest.mark.asyncio
 async def test_list_and_delete_user_memories(auth_headers, test_user):
-    """F5 Test: Verifies listing and deleting personal archival memories."""
-    from unittest.mock import patch, AsyncMock
-    fake_memories = {
-        "items": [
-            {"id": "mem-123", "fact": "Prefers dark mode", "category": "PREFERENCE", "created_at": "2026-01-01T00:00:00Z"},
-        ],
-        "total": 1,
-        "next_cursor": None,
-    }
-    with patch(
-        "backend.services.orchestration.episodic_memory_service.episodic_memory_service.list_memories_page",
-        new=AsyncMock(return_value=fake_memories),
-    ), patch(
-        "backend.services.orchestration.episodic_memory_service.episodic_memory_service.delete_memory",
-        new=AsyncMock(return_value=True),
-    ):
+    """Verifies canonical memory CRUD, filtering, search, privacy rejection, bulk delete, and cross-user isolation."""
+    from unittest.mock import patch
+    from qdrant_client import QdrantClient
+    from backend.db.qdrant import init_user_memories_collection
+
+    mem_qdrant = QdrantClient(":memory:")
+    init_user_memories_collection(mem_qdrant)
+
+    # Create a second user in the same department to verify strict user isolation
+    other_uid = uuid.uuid4().hex[:6]
+    async with async_session() as session:
+        other_user = User(
+            name=f"Peer User {other_uid}",
+            username=f"peer_{other_uid}",
+            email=f"peer_{other_uid}@cortex.local",
+            job_title="Engineer",
+            hashed_password="hash",
+            role=Role.EMPLOYEE,
+            department=test_user.department,
+            clearance_level=ClearanceLevel.INTERNAL,
+            token_version=1,
+            is_active=True,
+        )
+        session.add(other_user)
+        await session.commit()
+        await session.refresh(other_user)
+
+    other_token = create_access_token(
+        data={
+            "sub": str(other_user.id),
+            "username": other_user.username,
+            "role": other_user.role.value,
+            "department": other_user.department,
+            "clearance_level": other_user.clearance_level.value,
+            "token_version": other_user.token_version,
+        }
+    )
+    other_headers = {"Authorization": f"Bearer {other_token}"}
+
+    with patch("backend.routers.chat._safe_qdrant_client", return_value=mem_qdrant):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            res = await client.get("/api/v1/chat/memories", headers=auth_headers)
-            assert res.status_code == 200
-            data = res.json()
-            assert len(data["items"]) == 1
-            assert data["items"][0]["memory_id"] == "mem-123"
-            assert data["items"][0]["text"] == "Prefers dark mode"
+            # 1. Create two memories
+            c1 = await client.post(
+                "/api/v1/chat/memories",
+                json={"text": "Prefers concise dark-mode code blocks.", "category": "preference"},
+                headers=auth_headers,
+            )
+            assert c1.status_code == 201
+            m1 = c1.json()
+            assert m1["status"] == "active"
 
-            del_res = await client.delete("/api/v1/chat/memories/mem-123", headers=auth_headers)
+            c2 = await client.post(
+                "/api/v1/chat/memories",
+                json={"text": "Main backend stack is FastAPI and PostgreSQL.", "category": "tech_stack"},
+                headers=auth_headers,
+            )
+            assert c2.status_code == 201
+            m2 = c2.json()
+
+            # 2. Secret/credential rejected with 422
+            bad = await client.post(
+                "/api/v1/chat/memories",
+                json={"text": "My API key is sk-proj-1234567890abcdefghij", "category": "general"},
+                headers=auth_headers,
+            )
+            assert bad.status_code == 422
+
+            # 3. List with category filter
+            res_cat = await client.get("/api/v1/chat/memories?category=preference", headers=auth_headers)
+            assert res_cat.status_code == 200
+            assert len(res_cat.json()["items"]) == 1
+            assert res_cat.json()["items"][0]["memory_id"] == m1["memory_id"]
+
+            # 4. Detail + Patch + optimistic version conflict (409)
+            det = await client.get(f"/api/v1/chat/memories/{m1['memory_id']}", headers=auth_headers)
+            assert det.status_code == 200
+            patch_ok = await client.patch(
+                f"/api/v1/chat/memories/{m1['memory_id']}",
+                json={"text": "Prefers very concise answers.", "category": "preference", "expected_version": 1},
+                headers=auth_headers,
+            )
+            assert patch_ok.status_code == 200
+            assert patch_ok.json()["version"] == 2
+
+            patch_conflict = await client.patch(
+                f"/api/v1/chat/memories/{m1['memory_id']}",
+                json={"text": "Stale write", "expected_version": 1},
+                headers=auth_headers,
+            )
+            assert patch_conflict.status_code == 409
+
+            # 5. Cross-user isolation (peer in same department cannot view/delete)
+            peer_get = await client.get(f"/api/v1/chat/memories/{m1['memory_id']}", headers=other_headers)
+            assert peer_get.status_code == 404
+            peer_del = await client.delete(f"/api/v1/chat/memories/{m1['memory_id']}", headers=other_headers)
+            assert peer_del.status_code == 404
+
+            # 6. Search endpoint
+            search_res = await client.get("/api/v1/chat/memories/search?q=PostgreSQL", headers=auth_headers)
+            assert search_res.status_code == 200
+            assert any(item["memory_id"] == m2["memory_id"] for item in search_res.json()["items"])
+
+            # 7. Single delete + bulk delete
+            del_res = await client.delete(f"/api/v1/chat/memories/{m1['memory_id']}", headers=auth_headers)
             assert del_res.status_code == 200
             assert del_res.json()["status"] == "deleted"
+
+            bulk_res = await client.post(
+                "/api/v1/chat/memories/bulk-delete",
+                json={"category": "tech_stack"},
+                headers=auth_headers,
+            )
+            assert bulk_res.status_code == 200
+            assert bulk_res.json()["deleted_count"] == 1
 
 
 @pytest.mark.asyncio

@@ -158,13 +158,13 @@ async def test_rewrite_query_triggers_on_pronoun_reference():
         assert "Engineering travel allowance" in resolved_query
 
 
-def test_archival_memory_lookup_only_for_personal_context_prompts():
+def test_archival_memory_lookup_skips_trivial_and_allows_non_trivial():
     from backend.services.orchestration.chat_service import should_search_archival_memory
 
     assert should_search_archival_memory("What is my leave balance?") is True
-    assert should_search_archival_memory("Can you use what you remember about me?") is True
-    assert should_search_archival_memory("What is the annual leave policy?") is False
-    assert should_search_archival_memory("Explain the security policy") is False
+    assert should_search_archival_memory("Continue the project from last month") is True
+    assert should_search_archival_memory("hi") is False
+    assert should_search_archival_memory("thanks!") is False
 
 
 def test_evidence_tokens_are_user_bound_and_opaque():

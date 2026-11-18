@@ -590,7 +590,7 @@ async def create_user_memory(
     validation = validate_memory_content(payload.text, is_explicit=True)
     if not validation.allowed:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=422,
             detail=validation.rejection_reason or "Memory content rejected by privacy policy.",
         )
 
@@ -646,7 +646,7 @@ async def update_user_memory(
     validation = validate_memory_content(payload.text, is_explicit=True)
     if not validation.allowed:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=422,
             detail=validation.rejection_reason or "Memory content rejected by privacy policy.",
         )
 
