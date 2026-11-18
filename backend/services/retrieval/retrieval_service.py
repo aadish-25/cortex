@@ -1,5 +1,5 @@
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from qdrant_client import QdrantClient, models
@@ -29,6 +29,8 @@ class SearchResult:
     confidence: ConfidenceLevel
     chunks: List[ScoredChunk]
     fallback_message: Optional[str] = None
+    top_score: Optional[float] = None
+    reranker_scores: List[float] = field(default_factory=list)
 
 
 def build_3d_rbac_filter(user: User) -> models.Filter:
@@ -195,7 +197,8 @@ async def internal_knowledge_search(
 
     # 4. Neural Cross-Encoder Re-ranking
     reranked = rerank_chunks(query, candidates, top_k=top_k)
-    top_score = reranked[0].score if reranked else 0.0
+    scores = [float(c.score) for c in reranked]
+    top_score = scores[0] if scores else 0.0
     confidence = classify_confidence(top_score)
 
     # 5. Low confidence cutoff (reject with uniform fallback string, 0 tokens to LLM)
@@ -205,6 +208,8 @@ async def internal_knowledge_search(
             confidence=confidence,
             chunks=[],
             fallback_message=FALLBACK_STRING,
+            top_score=top_score if scores else None,
+            reranker_scores=scores,
         )
 
     return SearchResult(
@@ -212,4 +217,6 @@ async def internal_knowledge_search(
         confidence=confidence,
         chunks=reranked,
         fallback_message=None,
+        top_score=top_score if scores else None,
+        reranker_scores=scores,
     )

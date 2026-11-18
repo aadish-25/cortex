@@ -4,7 +4,7 @@ from typing import Any, ClassVar, Dict, List, Optional
 import uuid
 from pydantic import BaseModel
 from sqlmodel import Field, SQLModel
-from sqlalchemy import UniqueConstraint
+from sqlalchemy import Column, DateTime, UniqueConstraint
 
 from backend.models.enums import FeedbackCategory
 
@@ -20,6 +20,11 @@ class Conversation(SQLModel, table=True):
     user_id: uuid.UUID = Field(foreign_key="users.id", index=True)
     title: str = Field(default="New Conversation")
     summary: Optional[str] = Field(default=None, nullable=True, description="Cached executive context summary of older compacted turns")
+    summarized_until_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+        description="Watermark timestamp of the latest message folded into `summary`",
+    )
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -83,10 +88,27 @@ class PlanTaskType(str, Enum):
     DIRECT_CHAT = "DIRECT_CHAT"            # Chit-chat, greetings, clarifications
 
 
+class ToolAction(str, Enum):
+    """Typed sub-actions emitted by the Fast LLM planner so tools don't rely on regex heuristics."""
+    DRIVE_LIST = "drive_list"
+    DRIVE_SEARCH = "drive_search"
+    DRIVE_READ_FILE = "drive_read_file"
+    GITHUB_LIST_ISSUES = "github_list_issues"
+    GITHUB_ISSUES_WITH_FILES = "github_issues_with_files"
+    GITHUB_LIST_PRS = "github_list_prs"
+    GITHUB_SEARCH_CODE = "github_search_code"
+    GITHUB_READ_FILE = "github_read_file"
+    ADMIN_HEALTH = "admin_health"
+    ADMIN_AUDIT_LOGS = "admin_audit_logs"
+    ADMIN_DOC_STATUS = "admin_doc_status"
+    ADMIN_REINDEX = "admin_reindex"
+
+
 class PlanTask(BaseModel):
     id: int
     type: PlanTaskType
     query: str
+    tool_action: Optional[ToolAction] = None
     depends_on: List[int] = Field(default_factory=list)
     status: str = "PENDING"
     output: Optional[Any] = None
@@ -98,3 +120,6 @@ class ExecutionPlan(BaseModel):
     original_query: str
     rewritten_query: Optional[str] = None
     was_rewritten: bool = False
+    should_save_memory: bool = False
+    memory_fact: Optional[str] = None
+    memory_category: Optional[str] = None

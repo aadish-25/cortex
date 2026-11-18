@@ -446,6 +446,11 @@ class MemoryItem(BaseModel):
     score: Optional[float] = None
 
 
+class MemoryUpdateRequest(BaseModel):
+    text: str = Field(..., min_length=2, max_length=1000)
+    category: Optional[str] = Field(default=None, max_length=60)
+
+
 @router.get("/memories")
 async def list_user_memories(
     limit: int = Query(default=25, ge=1, le=100),
@@ -474,6 +479,32 @@ async def list_user_memories(
         "next_cursor": result["next_cursor"],
         "has_more": result["next_cursor"] is not None,
     }
+
+@router.patch("/memories/{memory_id}", response_model=MemoryItem)
+async def update_user_memory(
+    memory_id: str,
+    payload: MemoryUpdateRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Updates an existing archival memory owned by the authenticated user."""
+    from backend.db.qdrant import get_qdrant_client
+    from backend.services.orchestration.episodic_memory_service import episodic_memory_service
+
+    client = get_qdrant_client()
+    updated = await episodic_memory_service.update_memory(
+        client=client,
+        user_id=current_user.id,
+        memory_id=memory_id,
+        new_text=payload.text,
+        category=payload.category,
+    )
+    if not updated:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Memory not found or access denied.",
+        )
+    return MemoryItem(**updated)
+
 
 @router.delete("/memories/{memory_id}", status_code=status.HTTP_200_OK)
 async def delete_user_memory(

@@ -47,6 +47,7 @@ async def init_db() -> None:
         import sqlalchemy as sa
         if "postgresql" in settings.DATABASE_URL:
             await conn.execute(sa.text("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS summary TEXT;"))
+            await conn.execute(sa.text("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS summarized_until_at TIMESTAMPTZ;"))
             await conn.execute(sa.text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS storage_path TEXT;"))
             await conn.execute(sa.text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS is_complete BOOLEAN NOT NULL DEFAULT TRUE;"))
             await conn.execute(sa.text("""
@@ -55,6 +56,13 @@ async def init_db() -> None:
                   AND (a.created_at < b.created_at OR (a.created_at = b.created_at AND a.id::text < b.id::text))
             """))
         elif "sqlite" in settings.DATABASE_URL:
+            conversation_columns = await conn.run_sync(
+                lambda sync_conn: [row[1] for row in sync_conn.exec_driver_sql("PRAGMA table_info(conversations)").fetchall()]
+            )
+            if "summary" not in conversation_columns:
+                await conn.execute(sa.text("ALTER TABLE conversations ADD COLUMN summary TEXT"))
+            if "summarized_until_at" not in conversation_columns:
+                await conn.execute(sa.text("ALTER TABLE conversations ADD COLUMN summarized_until_at DATETIME"))
             document_columns = await conn.run_sync(
                 lambda sync_conn: [row[1] for row in sync_conn.exec_driver_sql("PRAGMA table_info(documents)").fetchall()]
             )

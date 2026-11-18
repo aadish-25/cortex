@@ -1,3 +1,4 @@
+import json
 import logging
 import re
 from typing import List, Optional
@@ -5,15 +6,20 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 
 from backend.core.config import settings
-from backend.models.chat import ChatMessage, ChatRole, ExecutionPlan, PlanTask, PlanTaskType
+from backend.models.chat import ChatMessage, ChatRole, ExecutionPlan, PlanTask, PlanTaskType, ToolAction
 from backend.services.orchestration.llm_service import llm_service
+from backend.services.orchestration.memory_service import estimate_token_count
 
 logger = logging.getLogger(__name__)
+
+# Cap planner (Call 1) history context at 3,000 tokens so fast routing stays low-latency
+# while Synthesis (Call 2) receives the full 8,000-token window.
+PLANNER_HISTORY_TOKEN_BUDGET = 3000
 
 # Heuristic patterns identifying pronouns and relational anaphora in conversational follow-ups (Fallback only)
 ANAPHORA_PATTERN = re.compile(
     r"\b(it|its|they|them|their|those|these|this|that|he|she|his|her)\b|"
-    r"\b(what about|how about|can i claim that|the policy|the rule|the same|same for|as mentioned|above|previous)\b|"
+    r"\b(what about|how about|can i claim that|the policy|the rule|the same|same for|as mentioned|above|previous|open it|add to memor|remember)\b|"
     r"\.\.\.$",
     re.IGNORECASE,
 )
@@ -54,14 +60,36 @@ class LLMQueryRewrite(BaseModel):
 class LLMPlanTask(BaseModel):
     id: int = Field(description="Sequential task integer ID, e.g. 1, 2, 3")
     type: PlanTaskType = Field(
-        description="Task intent type: INTERNAL_RAG for company knowledge, EXTERNAL_WEB for internet search, STRUCTURED_LOOKUP for SQL DB queries, ACTION_WORKFLOW for Jira workflows, GITHUB_SEARCH for code/PR/issue search, DRIVE_SEARCH for Google Drive/Docs search, ADMIN_OPERATION for explicitly requested Admin-only operational tools, DIRECT_CHAT for greetings/chit-chat"
+        description="Task intent type: INTERNAL_RAG, EXTERNAL_WEB, STRUCTURED_LOOKUP, ACTION_WORKFLOW, GITHUB_SEARCH, DRIVE_SEARCH, ADMIN_OPERATION, DIRECT_CHAT"
     )
-    query: str = Field(description="Focused query, action instruction, or message for this specific task")
+    query: str = Field(description="Clean, typo-corrected search query, filename, or instruction for this specific task")
+    tool_action: Optional[ToolAction] = Field(
+        default=None,
+        description=(
+            "Sub-action for tool tasks: "
+            "DRIVE_SEARCH -> 'drive_list' | 'drive_search' | 'drive_read_file'; "
+            "GITHUB_SEARCH -> 'github_list_issues' | 'github_issues_with_files' | 'github_list_prs' | 'github_search_code' | 'github_read_file'; "
+            "ADMIN_OPERATION -> 'admin_health' | 'admin_audit_logs' | 'admin_doc_status' | 'admin_reindex'. "
+            "Null for other task types."
+        ),
+    )
     depends_on: List[int] = Field(default_factory=list, description="IDs of prerequisite tasks that must complete first")
 
 
 class LLMExecutionPlan(BaseModel):
     tasks: List[LLMPlanTask] = Field(description="List of plan tasks to execute")
+    should_save_memory: bool = Field(
+        default=False,
+        description="True if the user shared a persistent personal fact/preference (e.g. 'I like mermaid diagrams', 'I prefer code snippets', 'My base office is Pune') OR explicitly asked to save/remember something (including referring to the previous turn).",
+    )
+    memory_fact: Optional[str] = Field(
+        default=None,
+        description="If should_save_memory is True, the clean, typo-corrected single sentence fact/preference to save into the user's Memories (pulling context from recent history if the user just said 'add to memories'). Otherwise null.",
+    )
+    memory_category: Optional[str] = Field(
+        default=None,
+        description="If should_save_memory is True, one of: 'preference', 'tech_stack', 'project_context', 'location', 'general'. Otherwise null.",
+    )
 
 
 # ==========================================
@@ -94,26 +122,54 @@ def extract_recent_history_window(
 
 def format_conversation_history(
     history: Optional[List[ChatMessage]] = None,
-    max_turns: int = 10,
+    max_turns: Optional[int] = None,
     summary: Optional[str] = None,
+    max_tokens: Optional[int] = None,
 ) -> str:
     """
-    Formats the conversation history for the LLM with support for Rolling Compaction (Decision D28).
-    - If a prior summary exists, it is prepended: '[Prior Conversation Summary: ...]'
-    - Preserves up to max_turns recent messages to maintain long-range context without blinding the model.
+    Formats conversation history for the LLM.
+    - Preserves any SYSTEM summary message injected by prepare_context_window (or explicit `summary`).
+    - When `max_turns` is set (e.g., query rewrite), keeps at most the last `max_turns * 2` dialogue messages.
+    - When `max_tokens` is set (e.g., Planner Call 1 budget), includes summary + as many newest
+      dialogue messages as fit within `max_tokens`.
     """
     parts: List[str] = []
-    if summary:
-        parts.append(f"[Prior Conversation Summary]: {summary}")
 
     if not history:
+        if summary:
+            parts.append(f"[Prior Conversation Summary]: {summary}")
         return "\n".join(parts)
 
-    non_system = [m for m in history if m.role in (ChatRole.USER, ChatRole.ASSISTANT)]
-    recent = non_system[-(max_turns * 2):] if max_turns else non_system
+    system_msgs = [m for m in history if m.role == ChatRole.SYSTEM]
+    dialogue = [m for m in history if m.role in (ChatRole.USER, ChatRole.ASSISTANT)]
 
-    for m in recent:
-        parts.append(f"{m.role.value.capitalize()}: {m.content}")
+    if max_turns is not None:
+        dialogue = dialogue[-(max_turns * 2):]
+
+    summary_block = ""
+    if system_msgs:
+        summary_block = system_msgs[-1].content
+    elif summary:
+        summary_block = f"[Prior Conversation Summary]: {summary}"
+
+    if summary_block:
+        parts.append(summary_block)
+
+    if max_tokens is not None:
+        remaining = max(0, max_tokens - estimate_token_count(summary_block))
+        selected_lines: List[str] = []
+        used = 0
+        for m in reversed(dialogue):
+            line = f"{m.role.value.capitalize()}: {m.content}"
+            t = estimate_token_count(line)
+            if selected_lines and (used + t > remaining):
+                break
+            selected_lines.insert(0, line)
+            used += t
+        parts.extend(selected_lines)
+    else:
+        for m in dialogue:
+            parts.append(f"{m.role.value.capitalize()}: {m.content}")
 
     return "\n".join(parts)
 
@@ -197,13 +253,15 @@ def classify_task_intent(query_text: Optional[str] = None) -> PlanTaskType:
     if any(q_lower.startswith(trigger) or trigger in q_lower for trigger in CHIT_CHAT_TRIGGERS) and len(query_text.split()) < 8:
         return PlanTaskType.DIRECT_CHAT
 
+    if any(k in q_lower for k in ["add to memor", "save to memor", "remember that", "remember this", "i prefer ", "i like "]) and not any(k in q_lower for k in ["policy", "leave", "ticket", "github", "drive"]):
+        return PlanTaskType.DIRECT_CHAT
     if any(k in q_lower for k in ["leave balance", "my tickets", "ticket status", "department head", "manager for"]):
         return PlanTaskType.STRUCTURED_LOOKUP
     elif any(k in q_lower for k in ["draft", "raise ticket", "create ticket", "file complaint", "apply for leave", "submit dispute"]):
         return PlanTaskType.ACTION_WORKFLOW
     elif any(k in q_lower for k in ["github", "pull request", "repo", "pr #", "git commit", "codebase", "branch"]):
         return PlanTaskType.GITHUB_SEARCH
-    elif any(k in q_lower for k in ["google drive", "shared drive", "gdoc", "drive file", "google doc"]):
+    elif any(k in q_lower for k in ["google drive", "shared drive", "gdoc", "drive file", "google doc", "my drive", "in drive"]) or re.search(r"\.(docx|pdf|png|jpg|jpeg|gdoc)\b", q_lower):
         return PlanTaskType.DRIVE_SEARCH
     elif any(k in q_lower for k in ["external", "market price", "latest 2026", "web search", "google", "flight benchmark", "news"]):
         return PlanTaskType.EXTERNAL_WEB
@@ -272,10 +330,93 @@ async def plan_and_decompose_query(
     """
     history = history or []
 
-    # Step 1: Turn-based query rewrite
+    # Step 1: Turn-based query rewrite (use last 2 turns only — rewrite doesn't need full history)
     active_query, was_rewritten = await rewrite_query(query, history, summary=summary)
+    # Planner (Call 1) receives [Summary if exists] + newest unsummarized turns up to 3,000 tokens
+    recent_history_block = format_conversation_history(
+        history,
+        summary=summary,
+        max_tokens=PLANNER_HISTORY_TOKEN_BUDGET,
+    )
 
-    # Admin operational intents are isolated from ordinary employee RAG requests.
+    # Step 2 (PRIMARY PATH): Fast LLM Structured Planning (routing + sub-actions + memory detection in ONE call)
+    if llm_service.is_configured():
+        history_section = (
+            f"Recent Conversation Context (use to resolve follow-ups like 'open it', bare filenames, or 'add to memories'):\n{recent_history_block}\n\n"
+            if recent_history_block
+            else ""
+        )
+        planner_instructions = (
+            "You are Cortex's query planner. Understand the user's true intent across English, Hinglish, slang, and typos, "
+            "using Recent Conversation Context to resolve references and infer which source/tool a follow-up belongs to.\n\n"
+            "Tools & sub-actions:\n"
+            "- INTERNAL_RAG: Company policies, handbooks, SOPs, compliance docs. Normalize `query` into a clean, spell-corrected search phrase.\n"
+            "- EXTERNAL_WEB: Public internet data (market rates, news, external benchmarks).\n"
+            "- STRUCTURED_LOOKUP: User's own SQL records (leave balance, their Jira tickets, department heads, profile).\n"
+            "- ACTION_WORKFLOW: Raising formal workplace Jira tickets/requests (IT, HR, Finance) ONLY — never for saving user memories/personalization.\n"
+            "- GITHUB_SEARCH: Repository code, issues, PRs, or opening a repo file. Set `tool_action` to `github_list_issues`, `github_issues_with_files`, `github_list_prs`, `github_search_code`, or `github_read_file` (with file path in `query`).\n"
+            "- DRIVE_SEARCH: Google Drive files. Set `tool_action` to `drive_list` (`query=\"\"`), `drive_search`, or `drive_read_file` (exact file name/keyword in `query`).\n"
+            "- ADMIN_OPERATION (Admin role only): `admin_health`, `admin_audit_logs`, `admin_doc_status`, or `admin_reindex`.\n"
+            "- DIRECT_CHAT: Greetings, general conversation, assistant capability questions, or personal preference/memory updates.\n\n"
+            f"Authenticated role: {user_role or 'Unknown'}.\n"
+            "Principles:\n"
+            "1. Context-first tool selection: Never hard-assume a file request belongs to Drive — use Recent Conversation Context and cues to pick Drive vs GitHub vs INTERNAL_RAG.\n"
+            "2. Personalization & Memory: Whenever the user states a durable personal fact/preference or asks you to remember/personalize responses (referring to current or prior turns), set `should_save_memory=true` with a clean `memory_fact` and `memory_category`, and route the response turn to `DIRECT_CHAT` unless another tool is also requested.\n"
+            "3. Decompose multi-intent prompts into minimal tasks with `depends_on` only where an action requires upstream output.\n\n"
+        )
+        prompt = f"{planner_instructions}{history_section}User Prompt: {active_query}\n"
+
+        # Exact tiktoken telemetry for Call 1 (Planner)
+        planner_sys_tokens = estimate_token_count(planner_instructions)
+        planner_schema_tokens = estimate_token_count(json.dumps(LLMExecutionPlan.model_json_schema()))
+        planner_hist_tokens = estimate_token_count(history_section)
+        planner_query_tokens = estimate_token_count(active_query)
+        logger.info(
+            "[TokenTelemetry][Planner] system_instructions=%d schema=%d history=%d query=%d total_input=%d (model=%s)",
+            planner_sys_tokens,
+            planner_schema_tokens,
+            planner_hist_tokens,
+            planner_query_tokens,
+            planner_sys_tokens + planner_schema_tokens + planner_hist_tokens + planner_query_tokens,
+            settings.FAST_ROUTING_MODEL,
+        )
+        try:
+            parsed = await llm_service.generate_structured(
+                prompt=prompt,
+                response_model=LLMExecutionPlan,
+                model=settings.FAST_ROUTING_MODEL,
+            )
+            if parsed and parsed.tasks:
+                parsed_tasks: List[PlanTask] = []
+                for t in parsed.tasks:
+                    # Enforce RBAC fail-closed: non-admins can never execute ADMIN_OPERATION
+                    task_type = t.type
+                    tool_action = t.tool_action
+                    if task_type == PlanTaskType.ADMIN_OPERATION and user_role != "Admin":
+                        task_type = PlanTaskType.INTERNAL_RAG
+                        tool_action = None
+                    parsed_tasks.append(
+                        PlanTask(
+                            id=t.id,
+                            type=task_type,
+                            query=t.query,
+                            tool_action=tool_action,
+                            depends_on=t.depends_on,
+                        )
+                    )
+                return ExecutionPlan(
+                    tasks=parsed_tasks,
+                    original_query=query,
+                    rewritten_query=active_query if was_rewritten else None,
+                    was_rewritten=was_rewritten,
+                    should_save_memory=bool(parsed.should_save_memory and parsed.memory_fact),
+                    memory_fact=parsed.memory_fact.strip() if parsed.memory_fact else None,
+                    memory_category=parsed.memory_category,
+                )
+        except Exception as exc:
+            logger.warning("LLM DAG decomposition failed, falling back to offline heuristic: %s", exc)
+
+    # Step 3 (OFFLINE / ERROR FALLBACK ONLY): Heuristic routing when LLM is unavailable
     if user_role == "Admin":
         admin_intent = re.search(
             r"\b(system health|service health|infrastructure health|health of|audit logs?|audit trail|reindex|re-index|retry ingestion|document status|indexing status|redis status|qdrant status|postgres status|status of (?:redis|qdrant|postgres|database|system))\b",
@@ -290,56 +431,6 @@ async def plan_and_decompose_query(
                 was_rewritten=was_rewritten,
             )
 
-    # Step 2: Multi-Query Decomposition with LiteLLM Abstraction Layer
-    if llm_service.is_configured():
-        prompt = (
-            "You are an enterprise query planner and multi-intent DAG decomposition engine.\n"
-            "Analyze the user's prompt (which may be in English, Hinglish, informal language, or mixed phrasing).\n"
-            "Users may chain multiple intents using commas, semicolons, vertical bars ('|'), plus signs ('+'), slashes ('/'), conjunctions, or natural transitions.\n\n"
-            "Intent types:\n"
-            "- INTERNAL_RAG: Company policies, employee handbook, benefits, tech stack, travel & offsite rules, security clearance.\n"
-            "- EXTERNAL_WEB: Public internet search for outside market data, flights, general news, tax benchmarks.\n"
-            "- STRUCTURED_LOOKUP: Internal SQL lookups for user leave balances, ticket status, department managers.\n"
-            "- ACTION_WORKFLOW: Drafting or submitting Jira service tickets, equipment orders, leave requests.\n"
-            "- GITHUB_SEARCH: Search code repositories, view pull requests, issues, or inspect code files in GitHub. ONLY assign if the user explicitly mentions GitHub, repo, PRs, issues, commits, or codebase.\n"
-            "- DRIVE_SEARCH: Search company Google Shared Drive, Google Docs, or fetch shared file contents. ONLY assign if the user explicitly mentions Google Drive, Drive, shared folder, or gdoc.\n"
-            "- ADMIN_OPERATION: Inspect system health, audit logs, document status, or explicitly trigger reindex. Only use for authenticated Admin users and explicit operational requests.\n"
-            "- DIRECT_CHAT: Greetings, conversational pleasantries ('What's up', 'kya chal raha hai', 'who are you'), or general banter.\n\n"
-            f"Authenticated role: {user_role or 'Unknown'}. Do not assign ADMIN_OPERATION unless role is exactly Admin.\n"
-            "Rules:\n"
-            "- Decompose compound prompts into discrete, standalone sub-tasks.\n"
-            "- Default knowledge retrieval ALWAYS routes to INTERNAL_RAG unless the user explicitly requests Drive or GitHub.\n"
-            "- Independent tasks must have depends_on: [].\n"
-            "- If the query is conversational chit-chat, assign DIRECT_CHAT with depends_on: [].\n"
-            "- Action tasks that require context from RAG or SQL lookups must declare their prerequisite task IDs in depends_on.\n\n"
-            f"User Prompt: {active_query}\n"
-        )
-        try:
-            parsed = await llm_service.generate_structured(
-                prompt=prompt,
-                response_model=LLMExecutionPlan,
-                model=settings.FAST_ROUTING_MODEL,
-            )
-            if parsed and parsed.tasks:
-                parsed_tasks = [
-                    PlanTask(
-                        id=t.id,
-                        type=t.type,
-                        query=t.query,
-                        depends_on=t.depends_on,
-                    )
-                    for t in parsed.tasks
-                ]
-                return ExecutionPlan(
-                    tasks=parsed_tasks,
-                    original_query=query,
-                    rewritten_query=active_query if was_rewritten else None,
-                    was_rewritten=was_rewritten,
-                )
-        except Exception as exc:
-            logger.warning("LLM DAG decomposition failed, falling back to heuristic: %s", exc)
-
-    # Fallback heuristic decomposition (when offline / no API keys configured)
     tasks = decompose_compound_query_heuristic(active_query)
     return ExecutionPlan(
         tasks=tasks,

@@ -25,8 +25,18 @@ class ScoredChunk:
     payload: Dict[str, Any]
 
 
+def _sigmoid(x: float) -> float:
+    """Maps raw ms-marco logit scores (unbounded) to [0, 1] probability."""
+    import math
+    if x >= 0:
+        z = math.exp(-x)
+        return 1.0 / (1.0 + z)
+    z = math.exp(x)
+    return z / (1.0 + z)
+
+
 def classify_confidence(top_score: float) -> ConfidenceLevel:
-    """Classifies top reranker score into deterministic confidence tiers."""
+    """Classifies calibrated [0, 1] top reranker score into deterministic confidence tiers."""
     if top_score >= settings.RERANKER_CONFIDENCE_THRESHOLD:  # 0.35
         return ConfidenceLevel.HIGH
     elif top_score >= 0.15:
@@ -62,7 +72,7 @@ def rerank_chunks(
     # Prefer stamped_content (D6 Identity Header) if present for contextual grounding
     passages = [c.get("stamped_content") or c.get("text", "") for c in candidates]
 
-    # Generate cross-encoder float scores
+    # Generate cross-encoder raw logits and sigmoid-normalize to [0, 1] probabilities
     raw_scores = list(reranker.rerank(query, passages))
 
     scored_list: List[ScoredChunk] = []
@@ -75,7 +85,7 @@ def rerank_chunks(
                 section=candidate.get("section", ""),
                 department=candidate.get("department", ""),
                 clearance_level=candidate.get("clearance_level", ""),
-                score=float(score),
+                score=_sigmoid(float(score)),
                 payload=candidate,
             )
         )

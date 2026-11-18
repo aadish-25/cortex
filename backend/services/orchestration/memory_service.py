@@ -25,6 +25,15 @@ MAX_CONVERSATION_TOKENS = settings.MAX_CONVERSATION_TOKENS
 # Keep at least the most recent raw messages intact during compaction
 RAW_PRESERVED_TURNS = 4
 
+# Target fraction of MAX_CONVERSATION_TOKENS to retain as raw tail messages after compaction,
+# leaving ~55% headroom so the next several turns do not immediately re-trigger compaction.
+POST_COMPACTION_RAW_RATIO = 0.45
+
+
+def _normalize_utc(dt: datetime) -> datetime:
+    """Normalizes naive (SQLite) and aware (PostgreSQL) datetimes to UTC for safe comparison."""
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
 
 _tiktoken_encoder: Any = None
 _tiktoken_attempted: bool = False
@@ -181,6 +190,58 @@ class MemoryService:
             f"- Clearance Level: {user.clearance_level.value if hasattr(user.clearance_level, 'value') else user.clearance_level}"
         )
 
+    async def _load_active_window_state(
+        self,
+        session: AsyncSession,
+        conversation_id: uuid.UUID,
+    ) -> Tuple[Optional[Conversation], Optional[str], List[ChatMessage], int, bool]:
+        """
+        Loads conversation watermark state and splits messages into:
+          - cached_summary (if previously compacted)
+          - unsummarized_messages (all messages strictly after `summarized_until_at`,
+            or all messages if no summary exists yet, or legacy tail if summary exists without watermark)
+          - active_tokens (summary_tokens + unsummarized_tokens)
+          - requires_compaction (True when active_tokens > MAX_CONVERSATION_TOKENS and enough turns exist)
+        """
+        conv_stmt = select(Conversation).where(Conversation.id == conversation_id)
+        conv_res = await session.execute(conv_stmt)
+        conversation = conv_res.scalar_one_or_none()
+        cached_summary = conversation.summary.strip() if (conversation and conversation.summary) else None
+        watermark = conversation.summarized_until_at if conversation else None
+
+        history = await self.get_conversation_history(session, conversation_id, limit=200)
+        if not history:
+            return conversation, cached_summary, [], 0, False
+
+        if cached_summary and watermark is not None:
+            wm_utc = _normalize_utc(watermark)
+            unsummarized = [m for m in history if _normalize_utc(m.timestamp) > wm_utc]
+            if not unsummarized:
+                unsummarized = history[-RAW_PRESERVED_TURNS:]
+        elif cached_summary and watermark is None:
+            # Legacy summary created before `summarized_until_at` existed: preserve recent tail
+            unsummarized = history[-RAW_PRESERVED_TURNS:]
+        else:
+            unsummarized = history
+
+        summary_tokens = estimate_token_count(cached_summary) if cached_summary else 0
+        unsummarized_tokens = sum(estimate_token_count(m.content) for m in unsummarized)
+        active_tokens = summary_tokens + unsummarized_tokens
+        requires_compaction = (
+            active_tokens > MAX_CONVERSATION_TOKENS
+            and len(unsummarized) > RAW_PRESERVED_TURNS
+        )
+        return conversation, cached_summary, unsummarized, active_tokens, requires_compaction
+
+    async def needs_compaction(
+        self,
+        session: AsyncSession,
+        conversation_id: uuid.UUID,
+    ) -> bool:
+        """Fast DB-only pre-check so ChatService can emit a live 'Compacting' SSE event before LLM compaction starts."""
+        _, _, _, _, requires_compaction = await self._load_active_window_state(session, conversation_id)
+        return requires_compaction
+
     async def prepare_context_window(
         self,
         session: AsyncSession,
@@ -188,84 +249,109 @@ class MemoryService:
         user: User,
     ) -> Tuple[List[ChatMessage], bool]:
         """
-        Constructs context window with 8,000-token rolling buffer compaction (Decisions D28 & D37).
-        Uses lazy compaction:
-          1. If total tokens <= 8,000, returns raw history directly (Zero LLM calls).
-          2. If a cached summary already exists on the Conversation row, it is prepended
-             to recent turns without re-summarizing on every turn.
-          3. Only when total uncompressed context crosses 8,000 tokens is a one-off
-             summarization executed and saved to `Conversation.summary`.
-          4. PostgreSQL `messages` table remains 100% append-only and immutable.
-        """
-        # Fetch conversation record to check for cached summary
-        conv_stmt = select(Conversation).where(Conversation.id == conversation_id)
-        conv_res = await session.execute(conv_stmt)
-        conversation = conv_res.scalar_one_or_none()
-        cached_summary = conversation.summary if conversation else None
+        Constructs a ChatGPT-style watermarked context window (Decisions D28 & D37).
 
-        history = await self.get_conversation_history(session, conversation_id, limit=50)
-        if not history:
+        Strategy:
+          - No summary yet & total tokens <= 8,000: return ALL raw history verbatim (zero LLM calls).
+          - Summary cached & (summary + all unsummarized turns since `summarized_until_at`) <= 8,000:
+            return [summary_msg] + ALL unsummarized turns verbatim (zero LLM calls).
+          - Active tokens > 8,000: fold [previous summary if any] + older unsummarized turns into an
+            updated executive brief, advance `Conversation.summarized_until_at` watermark, and keep
+            the most recent raw turns intact (~45% of budget, min RAW_PRESERVED_TURNS).
+          - PostgreSQL `messages` table remains 100% append-only and immutable.
+        """
+        conversation, cached_summary, unsummarized, active_tokens, requires_compaction = (
+            await self._load_active_window_state(session, conversation_id)
+        )
+        if not unsummarized:
             return [], False
 
-        # If a cached summary already exists, context window is summary + last RAW_PRESERVED_TURNS
+        is_near_ceiling = active_tokens >= (MAX_CONVERSATION_TOKENS * 0.85)
+
+        # Fast path: fits cleanly in budget (Zero LLM calls)
+        if not requires_compaction:
+            if cached_summary:
+                compacted_system_msg = ChatMessage(
+                    role=ChatRole.SYSTEM,
+                    content=f"[Executive Context Summary of Past Turns]:\n{cached_summary}",
+                )
+                return [compacted_system_msg] + unsummarized, is_near_ceiling
+            return unsummarized, is_near_ceiling
+
+        # Watermarked rolling compaction: preserve newest turns (~45% of budget, at least RAW_PRESERVED_TURNS)
+        tail_budget = max(500, int(MAX_CONVERSATION_TOKENS * POST_COMPACTION_RAW_RATIO))
+        recent_turns: List[ChatMessage] = []
+        running = 0
+        for msg in reversed(unsummarized):
+            t = estimate_token_count(msg.content)
+            if len(recent_turns) >= RAW_PRESERVED_TURNS and (running + t > tail_budget):
+                break
+            recent_turns.insert(0, msg)
+            running += t
+
+        # Ensure at least 1 older turn is folded so watermark strictly advances
+        if len(recent_turns) >= len(unsummarized):
+            recent_turns = unsummarized[-RAW_PRESERVED_TURNS:]
+
+        older_turns = unsummarized[: len(unsummarized) - len(recent_turns)]
+        new_watermark = older_turns[-1].timestamp
+
+        older_sections: List[str] = []
         if cached_summary:
-            compacted_system_msg = ChatMessage(
-                role=ChatRole.SYSTEM,
-                content=f"[Executive Context Summary of Past Turns]:\n{cached_summary.strip()}",
-            )
-            recent_turns = history[-RAW_PRESERVED_TURNS:]
-            combined_tokens = estimate_token_count(cached_summary) + sum(estimate_token_count(m.content) for m in recent_turns)
-            is_near = combined_tokens >= (MAX_CONVERSATION_TOKENS * 0.85)
+            older_sections.append(f"[Previous Executive Summary]:\n{cached_summary}")
+        older_sections.append(
+            "[Additional Turns to Fold In]:\n"
+            + "\n".join(f"{t.role.value}: {t.content}" for t in older_turns)
+        )
+        older_text = "\n\n".join(older_sections)
 
-            # If combined context is comfortably within 8,000 tokens, return immediately without re-summarizing
-            if combined_tokens <= MAX_CONVERSATION_TOKENS:
-                return [compacted_system_msg] + recent_turns, is_near
-
-        total_tokens = sum(estimate_token_count(msg.content) for msg in history)
-        is_near_ceiling = total_tokens >= (MAX_CONVERSATION_TOKENS * 0.85)
-
-        # If within comfortable token limits or history is short, return intact (Zero LLM calls)
-        if total_tokens <= MAX_CONVERSATION_TOKENS or len(history) <= RAW_PRESERVED_TURNS:
-            return history, is_near_ceiling
-
-        # Rolling compaction: Summarize older turns, preserve last RAW_PRESERVED_TURNS
-        older_turns = history[:-RAW_PRESERVED_TURNS]
-        recent_turns = history[-RAW_PRESERVED_TURNS:]
-
-        older_text = "\n".join(f"{t.role.value}: {t.content}" for t in older_turns)
         summary_prompt = (
-            "Summarize the key facts, decisions, and constraints from these earlier conversational turns "
-            "into a dense, factual bullet-point executive brief. Avoid conversational fluff:\n\n"
+            "Produce an updated, dense, factual bullet-point executive brief capturing all key facts, "
+            "decisions, entities, file names, preferences, and constraints from the prior summary (if any) "
+            "and the additional conversational turns below. Avoid conversational fluff:\n\n"
             f"{older_text}"
         )
 
         try:
             summary = await llm_service.generate_text(
                 prompt=summary_prompt,
-                system_prompt="You are Cortex's Conversational Memory Summarizer. Extract essential context.",
+                system_prompt="You are Cortex's Conversational Memory Compactor. Preserve essential context accurately.",
                 model=settings.FAST_ROUTING_MODEL,
                 temperature=0.0,
             )
+            clean_summary = summary.strip()
             compacted_message = ChatMessage(
                 role=ChatRole.SYSTEM,
-                content=f"[Executive Context Summary of Past Turns]:\n{summary.strip()}",
+                content=f"[Executive Context Summary of Past Turns]:\n{clean_summary}",
             )
+            new_summary_tokens = estimate_token_count(clean_summary)
             logger.info(
-                "Compacted conversation %s: %d older turns summarized into %d tokens",
+                "Compacted conversation %s: folded %d turns into %d-token brief (watermark=%s), retaining %d raw turns (%d tokens)",
                 conversation_id,
                 len(older_turns),
-                estimate_token_count(summary),
+                new_summary_tokens,
+                new_watermark.isoformat(),
+                len(recent_turns),
+                running,
             )
 
-            # Cache the summary on Conversation model for future turns
+            # Persist updated summary + watermark on Conversation row
             if conversation:
-                conversation.summary = summary.strip()
+                conversation.summary = clean_summary
+                conversation.summarized_until_at = _normalize_utc(new_watermark)
                 session.add(conversation)
                 await session.commit()
 
-            return [compacted_message] + recent_turns, is_near_ceiling
+            post_compaction_near = (new_summary_tokens + running) >= (MAX_CONVERSATION_TOKENS * 0.85)
+            return [compacted_message] + recent_turns, post_compaction_near
         except Exception as e:
-            logger.warning("Rolling summarization failed (%s); falling back to recent turns only", e)
+            logger.warning("Rolling compaction failed (%s); falling back to preserved recent turns", e)
+            if cached_summary:
+                compacted_system_msg = ChatMessage(
+                    role=ChatRole.SYSTEM,
+                    content=f"[Executive Context Summary of Past Turns]:\n{cached_summary}",
+                )
+                return [compacted_system_msg] + recent_turns, is_near_ceiling
             return recent_turns, is_near_ceiling
 
     async def auto_title_conversation_if_needed(

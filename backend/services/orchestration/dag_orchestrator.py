@@ -7,7 +7,7 @@ from qdrant_client import QdrantClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import async_session
 
-from backend.models.chat import ChatMessage, ExecutionPlan, PlanTask, PlanTaskType
+from backend.models.chat import ChatMessage, ExecutionPlan, PlanTask, PlanTaskType, ToolAction
 from backend.models.user import User
 from backend.services.orchestration.query_planner import plan_and_decompose_query
 from backend.services.orchestration.sql_lookup_service import execute_sql_lookup
@@ -66,16 +66,27 @@ async def execute_task(
                 original_query=task.query,
                 top_k=5,
             )
-        # If low confidence, probe updating policies
+        # If low confidence, try LLM-first CRAG recovery (which also runs updating policy probe on miss)
         elif result.confidence == ConfidenceLevel.LOW:
-            updating_notice = await probe_updating_policies(
-                client=client,
-                session=session,
-                user=user,
-                query=task.query,
-            )
-            if updating_notice:
-                result.fallback_message = updating_notice
+            from backend.services.orchestration.llm_service import llm_service
+            from backend.services.retrieval.crag_service import reformulate_query_for_crag
+            if llm_service.is_configured() or reformulate_query_for_crag(task.query).lower() != task.query.strip().lower():
+                result = await execute_crag_recovery(
+                    client=client,
+                    session=session,
+                    user=user,
+                    original_query=task.query,
+                    top_k=5,
+                )
+            else:
+                updating_notice = await probe_updating_policies(
+                    client=client,
+                    session=session,
+                    user=user,
+                    query=task.query,
+                )
+                if updating_notice:
+                    result.fallback_message = updating_notice
 
         citations = [c.citation for c in result.chunks if c.citation]
         return result, citations
@@ -98,9 +109,20 @@ async def execute_task(
         citations = [r.url for r in web_results]
         return web_results, citations
 
-    # 3. Direct Chat / General Chit-Chat
+    # 3. Direct Chat / General Chit-Chat / Assistant Capabilities / Personal Preferences
     elif task.type == PlanTaskType.DIRECT_CHAT:
-        return "Hello! I am Cortex, your enterprise AI assistant. How can I help you today?", []
+        return (
+            "DIRECT_CHAT_CONTEXT:\n"
+            "You are Cortex, an enterprise AI workspace assistant.\n"
+            "Your live capabilities:\n"
+            "- Search and cite internal company documents scoped to the user's department & clearance.\n"
+            "- List, search, and read text from Google Drive files (Google Docs, PDF, DOCX, Markdown, TXT). "
+            "Note: You cannot visually open or inspect image files (PNG/JPG/etc.), though you can provide their Drive link.\n"
+            "- Inspect GitHub issues, pull requests, and repository code.\n"
+            "- Look up structured HR/leave/ticket records and draft Jira workflow tickets.\n"
+            "- Remember persistent personal preferences and facts in the user's Memories.\n"
+            "Respond naturally, directly, and helpfully to the user's message."
+        ), []
 
     # 4. Structured SQL Lookup (Phase 4.1 Bounded Parameterized Queries)
     elif task.type == PlanTaskType.STRUCTURED_LOOKUP:
@@ -134,7 +156,7 @@ async def execute_task(
                 "status": "ACTION_DRAFT_PENDING",
                 "action": task.query,
                 "derived_context": derived_ctx,
-                "draft": draft_resp.model_dump(),
+                "draft": draft_resp.model_dump(mode="json"),
                 "draft_id": str(draft_resp.draft_id),
                 "ttl_seconds_remaining": draft_resp.ttl_seconds_remaining,
                 "project_key": draft_resp.project_key,
@@ -151,15 +173,37 @@ async def execute_task(
             }, []
 
     # 6. GitHub Codebase & Issue Discovery (Phase 6.2 MCP)
+    # PRIMARY: Dispatch on LLM-emitted `task.tool_action`.
+    # FALLBACK (only when tool_action is None, e.g. offline/unit test): keyword heuristic.
     elif task.type == PlanTaskType.GITHUB_SEARCH:
         from backend.services.integrations.github_service import github_service
-        q_lower = task.query.lower()
-        if any(w in q_lower for w in ["pull request", "pr ", "prs"]):
+        action = task.tool_action
+        if action is None:
+            q_lower = task.query.lower()
+            if any(w in q_lower for w in ["pull request", "pr ", "prs"]):
+                action = ToolAction.GITHUB_LIST_PRS
+            elif any(w in q_lower for w in ["issue", "issues", "bug", "bugs"]):
+                action = (
+                    ToolAction.GITHUB_ISSUES_WITH_FILES
+                    if any(w in q_lower for w in ["file", "code", "correspond", "where", "path", "module"])
+                    else ToolAction.GITHUB_LIST_ISSUES
+                )
+            else:
+                action = ToolAction.GITHUB_SEARCH_CODE
+
+        if action == ToolAction.GITHUB_LIST_PRS:
             gh_result = await github_service.list_pull_requests()
             citations = [pr.get("html_url") for pr in gh_result.get("pull_requests", []) if pr.get("html_url")]
-        elif any(w in q_lower for w in ["issue", "bug"]):
-            gh_result = await github_service.list_issues()
+        elif action in (ToolAction.GITHUB_LIST_ISSUES, ToolAction.GITHUB_ISSUES_WITH_FILES):
+            gh_result = await github_service.list_issues(per_page=10)
             citations = [iss.get("html_url") for iss in gh_result.get("issues", []) if iss.get("html_url")]
+            if action == ToolAction.GITHUB_ISSUES_WITH_FILES:
+                repo_files = await github_service.list_repo_files()
+                if repo_files:
+                    gh_result["repo_files"] = repo_files
+        elif action == ToolAction.GITHUB_READ_FILE:
+            gh_result = await github_service.get_file_contents(path=task.query.strip())
+            citations = [gh_result["html_url"]] if gh_result.get("html_url") else []
         else:
             gh_result = await github_service.search_code(query=task.query)
             citations = [item.get("html_url") for item in gh_result.get("items", []) if item.get("html_url")]
@@ -168,13 +212,69 @@ async def execute_task(
     # 7. Privileged administrative operations (strictly Admin-only)
     elif task.type == PlanTaskType.ADMIN_OPERATION:
         from backend.services.admin.admin_agent import admin_agent
-        return await admin_agent.execute_from_query(session=session, user=user, query=task.query), []
+        return await admin_agent.execute_from_query(
+            session=session,
+            user=user,
+            query=task.query,
+            tool_action=task.tool_action,
+        ), []
 
-    # 8. Google Drive Shared Documents Discovery (Phase 6.2 MCP)
+    # 8. Google Drive Shared Documents Discovery & Content Extraction (Phase 6.2 MCP)
+    # PRIMARY: Dispatch on LLM-emitted `task.tool_action` ('drive_list', 'drive_search', 'drive_read_file').
+    # FALLBACK (only when tool_action is None, e.g. offline/unit test): regex/keyword heuristic.
     elif task.type == PlanTaskType.DRIVE_SEARCH:
+        import re
         from backend.services.integrations.google_drive_service import google_drive_service
-        drive_result = await google_drive_service.search_files(query=task.query)
-        citations = [f.get("webViewLink") for f in drive_result.get("files", []) if f.get("webViewLink")]
+        q_raw = (task.query or "").strip()
+        action = task.tool_action
+
+        if action is None:
+            q_lower = q_raw.lower()
+            if not q_raw:
+                action = ToolAction.DRIVE_LIST
+            elif re.search(r"\.(docx|pdf|md|txt|gdoc|png|jpg|jpeg|webp|csv)\b", q_lower) or any(
+                w in q_lower for w in ["open", "read", "tell me more", "summarize", "summary", "explain", "content", "inside", "details", "about "]
+            ):
+                action = ToolAction.DRIVE_READ_FILE
+            else:
+                action = ToolAction.DRIVE_SEARCH
+
+        if action == ToolAction.DRIVE_LIST:
+            drive_result = await google_drive_service.search_files(query="")
+            files = drive_result.get("files") or []
+            citations = [f.get("webViewLink") for f in files if f.get("webViewLink")]
+            return drive_result, citations
+
+        # For drive_search / drive_read_file, extract exact filename token if present in query
+        file_match = re.search(r"([A-Za-z0-9_\-\. ]+\.(?:docx|pdf|md|txt|gdoc|png|jpg|jpeg|webp|csv))", q_raw, re.IGNORECASE)
+        search_term = file_match.group(1).strip() if file_match else q_raw
+
+        drive_result = await google_drive_service.search_files(query=search_term)
+        files = drive_result.get("files") or []
+
+        # If exact name search returned nothing, list folder and match against available filenames
+        if not files and search_term:
+            all_res = await google_drive_service.search_files(query="")
+            all_files = all_res.get("files") or []
+            tokens = [t for t in re.split(r"[\s_\-\.]+", search_term.lower()) if len(t) > 2]
+            matched = [
+                f for f in all_files
+                if any(t in (f.get("name") or "").lower() for t in tokens)
+            ] if tokens else []
+            if matched:
+                drive_result = {**all_res, "files": matched, "total_count": len(matched)}
+                files = matched
+            else:
+                drive_result = {**drive_result, "available_files": [f.get("name") for f in all_files]}
+
+        if action == ToolAction.DRIVE_READ_FILE and files:
+            target_file = files[0]
+            file_id = target_file.get("id")
+            if file_id:
+                read_res = await google_drive_service.read_file_text(file_id)
+                drive_result["opened_file"] = read_res
+
+        citations = [f.get("webViewLink") for f in files if f.get("webViewLink")]
         return drive_result, citations
 
     return None, []
@@ -262,17 +362,43 @@ def synthesis_join_node(
             elif output.get("items"):  # GitHub code search
                 items = [f"- [`{item['name']}`]({item['html_url']}): {item.get('path')}" for item in output["items"]]
                 response_sections.append(f"### GitHub Code Search ({output.get('query')})\n" + "\n".join(items))
+            elif "items" in output and output.get("status") == "SUCCESS":
+                response_sections.append(f"### GitHub Code Search ({output.get('query')})\nNo matching code files were found in the repository.")
             elif output.get("pull_requests"):  # GitHub PRs
                 prs = [f"- [PR #{pr['number']}: {pr['title']}]({pr['html_url']}) ({pr['state']}, by @{pr['author']})" for pr in output["pull_requests"]]
                 response_sections.append("### GitHub Pull Requests\n" + "\n".join(prs))
             elif output.get("issues"):  # GitHub Issues
-                issues = [f"- [Issue #{iss['number']}: {iss['title']}]({iss['html_url']}) ({iss['state']}, by @{iss['author']})" for iss in output["issues"]]
-                response_sections.append("### GitHub Issues\n" + "\n".join(issues))
-            elif output.get("files"):  # Google Drive search
+                issue_lines = []
+                for iss in output["issues"]:
+                    line = f"- [Issue #{iss['number']}: {iss['title']}]({iss['html_url']}) ({iss['state']}, by @{iss['author']})"
+                    if iss.get("body"):
+                        line += f"\n  Description: {iss['body']}"
+                    issue_lines.append(line)
+                section = "### GitHub Issues\n" + "\n".join(issue_lines)
+                if output.get("repo_files"):
+                    section += "\n\n### Repository Files\n" + "\n".join(f"- `{p}`" for p in output["repo_files"])
+                response_sections.append(section)
+            elif "issues" in output and output.get("status") == "SUCCESS":
+                response_sections.append("### GitHub Issues\nThere are currently no open issues in the connected repository.")
+            elif output.get("files"):  # Google Drive search (with optional opened content)
                 files = [f"- [{f['name']}]({f.get('webViewLink', '#')}) (Type: {f.get('mimeType', 'unknown')})" for f in output["files"]]
-                response_sections.append(f"### Google Drive Search ({output.get('query')})\n" + "\n".join(files))
+                section = f"### Google Drive Search ({output.get('query')})\n" + "\n".join(files)
+                opened = output.get("opened_file")
+                if isinstance(opened, dict):
+                    if opened.get("content"):
+                        section += f"\n\n### Extracted Document Content: {opened.get('name') or opened.get('id')}\n{opened['content'][:6000]}"
+                    elif opened.get("message"):
+                        section += f"\n\n### File Access Notice\n{opened['message']}"
+                response_sections.append(section)
+            elif "files" in output and output.get("status") == "SUCCESS":  # Google Drive search returned 0 files
+                avail = output.get("available_files") or []
+                avail_note = ("\nAvailable files in Drive:\n" + "\n".join(f"- {n}" for n in avail)) if avail else ""
+                response_sections.append(
+                    f"### Google Drive Search ({output.get('query')})\n"
+                    f"No file named '{output.get('query')}' was found in the connected Google Drive folder.{avail_note}"
+                )
             elif output.get("content"):  # File content read
-                response_sections.append(f"### Document Content: {output.get('name') or output.get('id')}\n```\n{output['content'][:1000]}\n```")
+                response_sections.append(f"### Document Content: {output.get('name') or output.get('id')}\n```\n{output['content'][:6000]}\n```")
             else:
                 response_sections.append(output.get("message", ""))
 
@@ -360,12 +486,15 @@ async def orchestrate_dag_execution(
 
     # Citation anchors are assigned in synthesis order; this is the canonical list sent to the UI.
     anchored_citations = list(citation_map.values())
-    reranker_scores = [
-        float(chunk.score)
-        for output in task_outputs.values()
-        if isinstance(output, SearchResult)
-        for chunk in output.chunks
-    ]
+    reranker_scores: List[float] = []
+    for output in task_outputs.values():
+        if isinstance(output, SearchResult):
+            if output.reranker_scores:
+                reranker_scores.extend(float(s) for s in output.reranker_scores)
+            elif output.chunks:
+                reranker_scores.extend(float(chunk.score) for chunk in output.chunks)
+            elif output.top_score is not None:
+                reranker_scores.append(float(output.top_score))
     return OrchestratorResponse(
         plan=plan,
         final_response=final_text,
