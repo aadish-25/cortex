@@ -134,11 +134,14 @@ async def test_get_document_status_success_and_not_found(async_session_factory):
 
 
 @pytest.mark.asyncio
-async def test_trigger_document_reindex(async_session_factory):
+async def test_trigger_document_reindex(async_session_factory, tmp_path):
     """Tests that triggering reindex flips document status to UPDATING."""
     async with async_session_factory() as session:
+        uid = uuid.uuid4().hex[:6]
+        src = tmp_path / f"reindex_target_{uid}.md"
+        src.write_text("# Reindex Target\nUpdated policy text.", encoding="utf-8")
         doc = Document(
-            filename="reindex_target.md",
+            filename=src.name,
             file_hash=f"hash_{uuid.uuid4().hex}",
             title="Reindex Target",
             department="HR",
@@ -146,6 +149,7 @@ async def test_trigger_document_reindex(async_session_factory):
             status=DocumentStatus.ACTIVE,
             version=1,
             is_live=True,
+            storage_path=str(src),
         )
         session.add(doc)
         await session.commit()
@@ -157,7 +161,7 @@ async def test_trigger_document_reindex(async_session_factory):
 
             # Check document state in DB
             stmt = select(Document).where(Document.id == doc.id)
-            refreshed = (await session.exec(stmt)).first()
+            refreshed = (await session.execute(stmt)).scalars().first()
             assert refreshed.status == DocumentStatus.UPDATING
             assert refreshed.is_live is False
 
@@ -170,8 +174,9 @@ async def test_trigger_document_reindex(async_session_factory):
 async def test_replace_document_version(async_session_factory):
     """Tests staging a new document version via replace_document_version."""
     async with async_session_factory() as session:
+        uid = uuid.uuid4().hex[:6]
         doc = Document(
-            filename="replace_policy.md",
+            filename=f"replace_policy_{uid}.md",
             file_hash=f"hash_{uuid.uuid4().hex}",
             title="Replace Policy",
             department="Finance",
@@ -184,12 +189,13 @@ async def test_replace_document_version(async_session_factory):
         await session.commit()
         await session.refresh(doc)
 
-        new_bytes = b"Updated finance policy content v2 with more details."
-        res = await replace_document_version(
-            session=session,
-            doc_id=doc.id,
-            file_bytes=new_bytes,
-        )
+        new_bytes = f"Updated finance policy content v2 ({uid}) with more details.".encode("utf-8")
+        with patch("backend.worker.tasks.reindex_document_task.delay"):
+            res = await replace_document_version(
+                session=session,
+                doc_id=doc.id,
+                file_bytes=new_bytes,
+            )
         assert res["status"] == "VERSION_STAGED"
         assert res["version"] == 2
         assert res["is_new_version"] is True
@@ -198,7 +204,41 @@ async def test_replace_document_version(async_session_factory):
 @pytest.mark.asyncio
 async def test_get_query_and_feedback_analytics(async_session_factory):
     """Tests analytics query aggregations for query volume and thumbs feedback."""
+    from backend.models.chat import Conversation, Message
+    from backend.models.enums import Role
+    from backend.models.user import User
+
     async with async_session_factory() as session:
+        uid = uuid.uuid4().hex[:6]
+        user = User(
+            name=f"Analytics User {uid}",
+            username=f"analytics_{uid}",
+            email=f"analytics_{uid}@cortex.local",
+            job_title="Analyst",
+            hashed_password="hash",
+            role=Role.EMPLOYEE,
+            department="Engineering",
+            clearance_level=ClearanceLevel.INTERNAL,
+            token_version=1,
+            is_active=True,
+        )
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+
+        conv = Conversation(user_id=user.id, title="Analytics Conv")
+        session.add(conv)
+        await session.commit()
+        await session.refresh(conv)
+
+        m1 = Message(conversation_id=conv.id, sender="assistant", content="Answer 1")
+        m2 = Message(conversation_id=conv.id, sender="assistant", content="Answer 2")
+        session.add(m1)
+        session.add(m2)
+        await session.commit()
+        await session.refresh(m1)
+        await session.refresh(m2)
+
         # 1. Add audit query event
         q_log = AuditLog(
             event_tag="CHAT_QUERY",
@@ -208,15 +248,15 @@ async def test_get_query_and_feedback_analytics(async_session_factory):
         )
         session.add(q_log)
 
-        # 2. Add feedback events
+        # 2. Add feedback events linked to valid FK rows
         fb1 = MessageFeedback(
-            message_id=uuid.uuid4(),
-            user_id=uuid.uuid4(),
+            message_id=m1.id,
+            user_id=user.id,
             is_thumbs_up=True,
         )
         fb2 = MessageFeedback(
-            message_id=uuid.uuid4(),
-            user_id=uuid.uuid4(),
+            message_id=m2.id,
+            user_id=user.id,
             is_thumbs_up=False,
         )
         session.add(fb1)

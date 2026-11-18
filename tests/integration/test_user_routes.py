@@ -127,7 +127,7 @@ async def test_admin_update_user():
 
         # 1. Fetch user to get ID
         users_res = await client.get(
-            "/api/v1/users/",
+            "/api/v1/users/?search=employee_fin",
             headers={"Authorization": f"Bearer {admin_token}"},
         )
         employee = next(u for u in users_res.json()["items"] if u["username"] == "employee_fin")
@@ -164,7 +164,7 @@ async def test_admin_revoke_user_sessions():
         admin_token = await get_auth_token(client, "admin", "admin123")
 
         users_res = await client.get(
-            "/api/v1/users/",
+            "/api/v1/users/?search=manager_fin",
             headers={"Authorization": f"Bearer {admin_token}"},
         )
         target_user = next(u for u in users_res.json()["items"] if u["username"] == "manager_fin")

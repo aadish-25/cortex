@@ -51,8 +51,8 @@ async def test_admin_routes_unauthenticated_rejected():
 async def test_admin_routes_employee_forbidden():
     """Verifies that an Employee cannot access administrative endpoints (403)."""
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        # rahul is an Employee in default seed
-        token = await get_token(client, "rahul", "employee123")
+        # employee_eng is an Employee in default seed
+        token = await get_token(client, "employee_eng", "employee123")
         headers = {"Authorization": f"Bearer {token}"}
 
         res = await client.get("/api/v1/admin/health", headers=headers)
@@ -69,8 +69,8 @@ async def test_admin_routes_employee_forbidden():
 async def test_admin_routes_manager_forbidden():
     """Verifies that a Manager cannot access administrative endpoints (403)."""
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        # priya is a Manager in default seed
-        token = await get_token(client, "priya", "manager123")
+        # manager_eng is a Manager in default seed
+        token = await get_token(client, "manager_eng", "manager123")
         headers = {"Authorization": f"Bearer {token}"}
 
         res = await client.get("/api/v1/admin/health", headers=headers)
@@ -166,7 +166,7 @@ async def test_admin_document_status_and_reindex():
         }
         res_upload = await client.post("/api/v1/documents/upload", headers=headers, files=files, data=data)
         assert res_upload.status_code == 201
-        doc_id = res_upload.json()["id"]
+        doc_id = res_upload.json()["document"]["id"]
 
         # 3. Query document status
         res_status = await client.get(f"/api/v1/admin/documents/{doc_id}/status", headers=headers)

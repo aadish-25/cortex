@@ -95,8 +95,10 @@ async def test_admin_agent_inspect_system_health(async_session_factory, mock_adm
 async def test_admin_agent_get_document_status(async_session_factory, mock_admin_user):
     """Verifies admin execution of get_document_status by filename."""
     async with async_session_factory() as session:
+        uid = uuid.uuid4().hex[:6]
+        fname = f"travel_rules_{uid}.md"
         doc = Document(
-            filename="travel_rules.md",
+            filename=fname,
             file_hash=f"hash_{uuid.uuid4().hex}",
             title="Travel Rules",
             department="Finance",
@@ -113,23 +115,26 @@ async def test_admin_agent_get_document_status(async_session_factory, mock_admin
             session=session,
             user=mock_admin_user,
             tool_name="get_document_status",
-            arguments={"identifier": "travel_rules.md"},
+            arguments={"identifier": fname},
         )
         assert res["status"] == "SUCCESS"
-        assert res["document"]["filename"] == "travel_rules.md"
+        assert res["document"]["filename"] == fname
         assert res["document"]["is_live"] is True
 
         formatted = admin_agent.format_response("get_document_status", res)
-        assert "travel_rules.md" in formatted
+        assert fname in formatted
         assert "v1" in formatted
 
 
 @pytest.mark.asyncio
-async def test_admin_agent_trigger_reindex(async_session_factory, mock_admin_user):
+async def test_admin_agent_trigger_reindex(async_session_factory, mock_admin_user, tmp_path):
     """Verifies admin execution of trigger_reindex tool."""
     async with async_session_factory() as session:
+        uid = uuid.uuid4().hex[:6]
+        src = tmp_path / f"onboarding_doc_{uid}.md"
+        src.write_text("# Onboarding\nDetails.", encoding="utf-8")
         doc = Document(
-            filename="onboarding_doc.md",
+            filename=src.name,
             file_hash=f"hash_{uuid.uuid4().hex}",
             title="Onboarding Doc",
             department="HR",
@@ -137,6 +142,7 @@ async def test_admin_agent_trigger_reindex(async_session_factory, mock_admin_use
             status=DocumentStatus.ACTIVE,
             version=1,
             is_live=True,
+            storage_path=str(src),
         )
         session.add(doc)
         await session.commit()
