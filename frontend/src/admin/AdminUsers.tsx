@@ -163,9 +163,6 @@ export function AdminUsers() {
           department: form.department,
           clearance_level: form.clearance_level,
         }
-        if (form.password && form.password.trim().length >= 10) {
-          payload.password = form.password.trim()
-        }
         await api(`/api/v1/users/${selected.id}`, { method: 'PATCH', body: JSON.stringify(payload) })
         setToast('User updated.')
       }
@@ -493,18 +490,11 @@ export function AdminUsers() {
               <label>Role<select value={form.role} onChange={(e) => setForm((f) => ({ ...f, role: e.target.value }))}><option>Employee</option><option>Manager</option><option>Admin</option></select></label>
               <label>Clearance<select value={form.clearance_level} onChange={(e) => setForm((f) => ({ ...f, clearance_level: e.target.value }))}><option>Public</option><option>Internal</option><option>Confidential</option></select></label>
               {modal === 'create' ? (
-                <label>Password<input type="password" value={form.password} onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))} required minLength={10} /></label>
+                <label>Password *<input type="password" value={form.password} onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))} required minLength={10} /></label>
               ) : (
-                <label>
-                  New Password (Optional)
-                  <input
-                    type="password"
-                    value={form.password}
-                    onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
-                    placeholder="Leave blank to keep current (min 10 chars)"
-                    minLength={10}
-                  />
-                </label>
+                <div style={{ gridColumn: 'span 2', padding: '8px 12px', background: 'var(--surface-soft)', border: '1px solid var(--border)', borderRadius: 6, fontSize: '11px', color: 'var(--muted)' }}>
+                  🔒 <strong>Password security:</strong> Administrators cannot view or modify employee personal passwords. Employees configure and manage their own passwords upon login.
+                </div>
               )}
             </div>
             {modal === 'create' && <p className="form-help">Accounts created here are active immediately. Use the access-request flow for employee self-registration.</p>}

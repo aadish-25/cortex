@@ -234,6 +234,11 @@ async def update_user(
     if payload.clearance_level is not None:
         user.clearance_level = payload.clearance_level
     if payload.password:
+        if admin_user.id != user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Administrators cannot modify an employee's personal password. Employees must change their own password.",
+            )
         user.hashed_password = hash_password(payload.password)
         user.token_version = max(1, user.token_version) + 1
 
