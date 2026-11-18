@@ -189,42 +189,60 @@ class EpisodicMemoryService:
             logger.warning("Error in extract_and_store_memories (%s)", e)
             return []
 
+    async def list_memories_page(
+        self,
+        client: QdrantClient,
+        user_id: uuid.UUID,
+        limit: int = 50,
+        offset: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Cursor-paginated memory listing scoped to one user."""
+        user_filter = models.Filter(
+            must=[models.FieldCondition(key="user_id", match=models.MatchValue(value=str(user_id)))]
+        )
+        try:
+            count_result = client.count(
+                collection_name=self.collection_name,
+                count_filter=user_filter,
+                exact=True,
+            )
+            scroll_res = client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=user_filter,
+                offset=offset,
+                limit=limit,
+                with_payload=True,
+                with_vectors=False,
+            )
+            points = scroll_res[0] if scroll_res else []
+            next_offset = scroll_res[1] if scroll_res and len(scroll_res) > 1 else None
+            return {
+                "items": [
+                    {
+                        "id": str(point.id),
+                        "fact": (point.payload or {}).get("fact"),
+                        "category": (point.payload or {}).get("category"),
+                        "created_at": (point.payload or {}).get("created_at"),
+                    }
+                    for point in points
+                    if point.payload
+                ],
+                "total": int(getattr(count_result, "count", 0)),
+                "next_cursor": str(next_offset) if next_offset is not None else None,
+            }
+        except Exception:
+            logger.exception("Could not list personal memories for user_id=%s", user_id)
+            raise
+
     async def list_memories(
         self,
         client: QdrantClient,
         user_id: uuid.UUID,
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
-        """Lists all stored archival memories for a given user."""
-        user_filter = models.Filter(
-            must=[
-                models.FieldCondition(
-                    key="user_id",
-                    match=models.MatchValue(value=str(user_id)),
-                )
-            ]
-        )
-        try:
-            scroll_res = client.scroll(
-                collection_name=self.collection_name,
-                scroll_filter=user_filter,
-                limit=limit,
-                with_payload=True,
-            )
-            points = scroll_res[0] if scroll_res else []
-            return [
-                {
-                    "id": str(p.id),
-                    "fact": p.payload.get("fact"),
-                    "category": p.payload.get("category"),
-                    "created_at": p.payload.get("created_at"),
-                }
-                for p in points
-                if p.payload
-            ]
-        except Exception as e:
-            logger.warning("Error listing user memories (%s)", e)
-            return []
+        """Backward-compatible first-page memory listing."""
+        result = await self.list_memories_page(client=client, user_id=user_id, limit=limit)
+        return result["items"]
 
     async def delete_memory(
         self,

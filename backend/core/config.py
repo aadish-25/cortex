@@ -14,12 +14,14 @@ class Settings(BaseSettings):
 
     # Environment-specific variables (Loaded strictly from .env)
     ENVIRONMENT: str = "development"
+    FRONTEND_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173"
     DATABASE_URL: str
     REDIS_URL: str
     QDRANT_URL: str
     QDRANT_API_KEY: str = ""
     JWT_SECRET_KEY: str
     JWT_ALGORITHM: str
+    CORTEX_BOOTSTRAP_ADMIN_PASSWORD: str = ""
     # Provider Multi-Key Rotation Pools (Priority: Groq -> OpenRouter -> Gemini)
     GROQ_API_KEYS: str = ""
     OPENROUTER_API_KEYS: str = ""

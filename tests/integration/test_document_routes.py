@@ -193,7 +193,7 @@ async def test_list_and_get_documents_with_3d_rbac():
             headers={"Authorization": f"Bearer {admin_token}"},
         )
         assert admin_list.status_code == 200
-        admin_doc_ids = [d["id"] for d in admin_list.json()]
+        admin_doc_ids = [d["id"] for d in admin_list.json()["items"]]
         assert conf_doc_id in admin_doc_ids
 
         # Engineering Manager (Clearance: Internal) cannot see HR Confidential in list
@@ -203,7 +203,7 @@ async def test_list_and_get_documents_with_3d_rbac():
             headers={"Authorization": f"Bearer {eng_mgr_token}"},
         )
         assert eng_list.status_code == 200
-        eng_doc_ids = [d["id"] for d in eng_list.json()]
+        eng_doc_ids = [d["id"] for d in eng_list.json()["items"]]
         assert conf_doc_id not in eng_doc_ids
 
         # Engineering Manager attempting to GET the document directly gets 403 Forbidden

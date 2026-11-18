@@ -74,7 +74,7 @@ class GitHubService:
 
         if not self.is_configured:
             # High-fidelity mock for uncredentialed dev/sandbox environments
-            logger.info("GitHub API token not set. Returning sandbox search results for query: '%s'", query)
+            logger.info("GitHub API token not set; returning sandbox search results")
             return {
                 "status": "SUCCESS",
                 "query": search_query,

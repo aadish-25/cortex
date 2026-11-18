@@ -44,9 +44,53 @@ async def init_db() -> None:
         # Import models so SQLModel metadata registers all tables
         import backend.models  # noqa: F401
         await conn.run_sync(SQLModel.metadata.create_all)
+        import sqlalchemy as sa
         if "postgresql" in settings.DATABASE_URL:
-            import sqlalchemy as sa
             await conn.execute(sa.text("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS summary TEXT;"))
+            await conn.execute(sa.text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS storage_path TEXT;"))
+            await conn.execute(sa.text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS is_complete BOOLEAN NOT NULL DEFAULT TRUE;"))
+            await conn.execute(sa.text("""
+                DELETE FROM message_feedback a USING message_feedback b
+                WHERE a.message_id = b.message_id AND a.user_id = b.user_id
+                  AND (a.created_at < b.created_at OR (a.created_at = b.created_at AND a.id::text < b.id::text))
+            """))
+        elif "sqlite" in settings.DATABASE_URL:
+            document_columns = await conn.run_sync(
+                lambda sync_conn: [row[1] for row in sync_conn.exec_driver_sql("PRAGMA table_info(documents)").fetchall()]
+            )
+            if "storage_path" not in document_columns:
+                await conn.execute(sa.text("ALTER TABLE documents ADD COLUMN storage_path TEXT"))
+            message_columns = await conn.run_sync(
+                lambda sync_conn: [row[1] for row in sync_conn.exec_driver_sql("PRAGMA table_info(messages)").fetchall()]
+            )
+            if "is_complete" not in message_columns:
+                await conn.execute(sa.text("ALTER TABLE messages ADD COLUMN is_complete BOOLEAN NOT NULL DEFAULT 1"))
+            await conn.execute(sa.text("""
+                DELETE FROM message_feedback
+                WHERE rowid NOT IN (
+                    SELECT MAX(rowid) FROM message_feedback GROUP BY message_id, user_id
+                )
+            """))
+        await conn.execute(sa.text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_message_feedback_user ON message_feedback (message_id, user_id)"
+        ))
+        # Scrub legacy audit rows that stored login identifiers or usernames in free-text details.
+        await conn.execute(sa.text("""
+            UPDATE audit_logs SET details = 'Invalid credentials supplied'
+            WHERE details LIKE 'Failed login attempt for identifier:%'
+        """))
+        await conn.execute(sa.text("""
+            UPDATE audit_logs SET details = 'User account created; identifiers redacted'
+            WHERE details LIKE 'Admin created user:%'
+        """))
+        await conn.execute(sa.text("""
+            UPDATE audit_logs SET details = 'User account updated; identifiers redacted'
+            WHERE details LIKE 'Admin updated user %'
+        """))
+        await conn.execute(sa.text("""
+            UPDATE audit_logs SET details = 'User sessions revoked; identifiers redacted'
+            WHERE details LIKE 'Admin % revoked sessions for user %'
+        """))
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:

@@ -12,6 +12,7 @@ from backend.models.enums import (
 )
 from backend.models.user import User, UserCreate, UserRead, UserUpdate
 from backend.models.document import Document, DocumentRead
+from backend.models.document_log import DocumentProcessingLog
 from backend.models.chat import Conversation, Message, MessageFeedback
 from backend.models.action_draft import (
     ActionDraft,
@@ -23,6 +24,7 @@ from backend.models.ticket import Ticket
 from backend.models.audit import AuditLog
 from backend.models.token_usage import TokenUsageLog
 from backend.models.leave import LeaveBalance
+from backend.models.query_quality import QueryQualityLog
 
 __all__ = [
     "Role",
@@ -40,6 +42,7 @@ __all__ = [
     "UserRead",
     "UserUpdate",
     "Document",
+    "DocumentProcessingLog",
     "DocumentRead",
     "Conversation",
     "Message",
@@ -52,4 +55,5 @@ __all__ = [
     "AuditLog",
     "TokenUsageLog",
     "LeaveBalance",
+    "QueryQualityLog",
 ]

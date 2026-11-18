@@ -137,7 +137,7 @@ async def test_list_conversations_and_messages(auth_headers, test_user):
         # 1. List conversations
         res_convs = await client.get("/api/v1/chat/conversations", headers=auth_headers)
         assert res_convs.status_code == 200
-        conv_list = res_convs.json()
+        conv_list = res_convs.json()["items"]
         assert any(c["id"] == str(conv_id) for c in conv_list)
 
         # 2. Get verbatim messages
@@ -146,7 +146,7 @@ async def test_list_conversations_and_messages(auth_headers, test_user):
             headers=auth_headers,
         )
         assert res_msgs.status_code == 200
-        msgs = res_msgs.json()
+        msgs = res_msgs.json()["items"]
         assert len(msgs) == 2
         assert msgs[0]["sender"] == "user"
         assert msgs[1]["sender"] == "assistant"
@@ -248,11 +248,15 @@ async def test_submit_message_feedback(auth_headers, test_user):
 async def test_list_and_delete_user_memories(auth_headers, test_user):
     """F5 Test: Verifies listing and deleting personal archival memories."""
     from unittest.mock import patch, AsyncMock
-    fake_memories = [
-        {"memory_id": "mem-123", "text": "Prefers dark mode", "category": "PREFERENCE", "created_at": "2026-01-01T00:00:00Z"},
-    ]
+    fake_memories = {
+        "items": [
+            {"id": "mem-123", "fact": "Prefers dark mode", "category": "PREFERENCE", "created_at": "2026-01-01T00:00:00Z"},
+        ],
+        "total": 1,
+        "next_cursor": None,
+    }
     with patch(
-        "backend.services.orchestration.episodic_memory_service.episodic_memory_service.list_memories",
+        "backend.services.orchestration.episodic_memory_service.episodic_memory_service.list_memories_page",
         new=AsyncMock(return_value=fake_memories),
     ), patch(
         "backend.services.orchestration.episodic_memory_service.episodic_memory_service.delete_memory",
@@ -263,13 +267,13 @@ async def test_list_and_delete_user_memories(auth_headers, test_user):
             res = await client.get("/api/v1/chat/memories", headers=auth_headers)
             assert res.status_code == 200
             data = res.json()
-            assert len(data) == 1
-            assert data[0]["memory_id"] == "mem-123"
-            assert data[0]["text"] == "Prefers dark mode"
+            assert len(data["items"]) == 1
+            assert data["items"][0]["memory_id"] == "mem-123"
+            assert data["items"][0]["text"] == "Prefers dark mode"
 
             del_res = await client.delete("/api/v1/chat/memories/mem-123", headers=auth_headers)
             assert del_res.status_code == 200
-            assert del_res.json()["deleted"] is True
+            assert del_res.json()["status"] == "deleted"
 
 
 @pytest.mark.asyncio
@@ -301,6 +305,8 @@ async def test_get_evidence_context_success(auth_headers, test_user):
         "clearance_level": "Internal",
         "doc_id": "doc-001",
         "chunk_index": 2,
+        "document_id": "doc-001",
+        "is_live": True,
     }
 
     mock_client = MagicMock()
@@ -316,6 +322,8 @@ async def test_get_evidence_context_success(auth_headers, test_user):
         "clearance_level": "Internal",
         "doc_id": "doc-001",
         "chunk_index": 1,
+        "document_id": "doc-001",
+        "is_live": True,
     }
     succeeding_point = MagicMock()
     succeeding_point.id = "succ-uuid"
@@ -327,17 +335,21 @@ async def test_get_evidence_context_success(auth_headers, test_user):
         "clearance_level": "Internal",
         "doc_id": "doc-001",
         "chunk_index": 3,
+        "document_id": "doc-001",
+        "is_live": True,
     }
 
-    mock_client.scroll.return_value = ([preceding_point, succeeding_point], None)
+    mock_client.scroll.side_effect = [([preceding_point], None), ([succeeding_point], None)]
 
+    from backend.core.evidence_tokens import create_evidence_token
+    evidence_id = create_evidence_token("target-uuid", test_user.id)
     with patch("backend.db.qdrant.get_qdrant_client", return_value=mock_client):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            res = await client.get("/api/v1/chat/evidence/target-uuid", headers=auth_headers)
+            res = await client.get(f"/api/v1/chat/evidence/{evidence_id}", headers=auth_headers)
             assert res.status_code == 200
             data = res.json()
-            assert data["target"]["chunk_id"] == "target-uuid"
+            assert "chunk_id" not in data["target"]
             assert data["target"]["text"] == "Target cited clause."
             assert data["preceding"]["text"] == "Preceding context clause."
             assert data["succeeding"]["text"] == "Succeeding context clause."

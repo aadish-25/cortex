@@ -93,7 +93,7 @@ async def run_reconciliation_sweeper(
                     exact=False,
                 )
                 if count_res.count == 0:
-                    logger.warning("Sweeper: Document '%s' (%s) active in SQL but has 0 vectors in Qdrant! Flagging for reindex.", doc.filename, doc.id)
+                    logger.warning("Sweeper: Active document_id=%s has no vectors in Qdrant; flagging for reindex.", doc.id)
                     doc.status = DocumentStatus.UPDATING
                     doc.is_live = False
                     session.add(doc)

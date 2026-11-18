@@ -1,17 +1,25 @@
 from datetime import datetime, timezone
+import logging
 import hashlib
+import os
+import re
+from pathlib import Path
 from typing import List, Optional, Tuple
 import uuid
 from fastapi import HTTPException, status
 from qdrant_client import QdrantClient, models
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import func
 from sqlmodel import and_, col, or_, select
 
-from backend.core.config import settings
+from backend.core.config import settings, BASE_DIR
 from backend.models.document import Document
+from backend.models.document_log import DocumentProcessingLog
 from backend.models.enums import AuditCategory, CLEARANCE_RANK, ClearanceLevel, DocumentStatus, Role
 from backend.models.user import User
 from backend.services.auth.audit_service import log_audit_event
+
+logger = logging.getLogger(__name__)
 
 
 def compute_file_hash(content: bytes) -> str:
@@ -20,6 +28,37 @@ def compute_file_hash(content: bytes) -> str:
     Example output: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
     """
     return hashlib.sha256(content).hexdigest()
+
+
+def persist_document_file(document_id: uuid.UUID, filename: str, content: bytes) -> str:
+    """Persist original bytes under a generated filename (never trust upload paths)."""
+    extension = Path(filename).suffix.lower()
+    if extension not in {".md", ".docx", ".pdf", ".txt"}:
+        extension = ".bin"
+    storage_dir = BASE_DIR / "storage" / "documents"
+    storage_dir.mkdir(parents=True, exist_ok=True)
+    destination = storage_dir / f"{document_id}{extension}"
+    temporary = destination.with_suffix(destination.suffix + ".tmp")
+    temporary.write_bytes(content)
+    os.replace(temporary, destination)
+    return str(destination)
+
+
+async def record_document_processing_log(
+    session: AsyncSession,
+    document_id: uuid.UUID,
+    stage: str,
+    status: str,
+    message: str = "",
+) -> None:
+    record = DocumentProcessingLog(
+        document_id=document_id,
+        stage=stage[:64],
+        status=status[:32],
+        message=message[:1200],
+    )
+    session.add(record)
+    await session.commit()
 
 
 async def register_document_upload(
@@ -36,7 +75,7 @@ async def register_document_upload(
     """
     file_hash = compute_file_hash(content)
 
-    stmt_hash = select(Document).where(Document.file_hash == file_hash)
+    stmt_hash = select(Document).where(Document.file_hash == file_hash, Document.department == department)
     res_hash = await session.execute(stmt_hash)
     if res_hash.scalars().first():
         raise HTTPException(
@@ -48,7 +87,7 @@ async def register_document_upload(
 
     stmt_name = (
         select(Document)
-        .where(Document.filename == filename)
+        .where(Document.filename == filename, Document.department == department)
         .order_by(col(Document.version).desc())
     )
 
@@ -59,7 +98,7 @@ async def register_document_upload(
         new_version = existing_doc.version + 1
         is_new_version = True
 
-        existing_doc.status = DocumentStatus.UPDATING
+        # Keep the currently-live version active until the replacement is fully indexed.
         session.add(existing_doc)
     else:
         new_version = 1
@@ -84,7 +123,7 @@ async def register_document_upload(
         event_tag="DOC_UPLOAD_INITIATED",
         category=AuditCategory.DOCUMENT,
         status_code=200,
-        details=f"Uploaded '{filename}' (v{new_version}, dept={department}, clearance={clearance_level.value})",
+        details=f"document_id={new_doc.id}; version={new_version}; department={department}; clearance={clearance_level.value}",
     )
     return new_doc, is_new_version
 
@@ -92,11 +131,12 @@ async def register_document_upload(
 async def finalize_document_activation(
     session: AsyncSession,
     doc_id: uuid.UUID,
+    qdrant_client: Optional[QdrantClient] = None,
 ) -> Document:
     """
     Decision D4 Atomic Activation in SQL:
     1. Sets new document status=ACTIVE, is_live=True.
-    2. Marks older versions of the same filename with is_live=False.
+    2. Marks older versions of the same filename within the same department with is_live=False.
     """
     stmt = select(Document).where(Document.id == doc_id)
     res = await session.execute(stmt)
@@ -107,12 +147,30 @@ async def finalize_document_activation(
     # Mark all older versions of this filename as inactive
     older_stmt = (
         select(Document)
-        .where(Document.filename == doc.filename)
+        .where(Document.filename == doc.filename, Document.department == doc.department)
         .where(Document.id != doc.id)
     )
     older_res = await session.execute(older_stmt)
-    for older_doc in older_res.scalars().all():
+    old_versions = older_res.scalars().all()
+    if qdrant_client is None:
+        from backend.db.qdrant import get_qdrant_client
+        qdrant_client = get_qdrant_client()
+    for older_doc in old_versions:
+        # SQL row and Qdrant payload must agree; otherwise stale versions remain searchable.
+        try:
+            qdrant_client.set_payload(
+                collection_name=settings.QDRANT_COLLECTION,
+                payload={"is_live": False},
+                points=models.Filter(
+                    must=[models.FieldCondition(key="document_id", match=models.MatchValue(value=str(older_doc.id)))]
+                ),
+            )
+        except Exception:
+            logger.exception("Failed to deactivate old Qdrant version document_id=%s", older_doc.id)
+            raise
         older_doc.is_live = False
+        if older_doc.status == DocumentStatus.UPDATING:
+            older_doc.status = DocumentStatus.ACTIVE
         session.add(older_doc)
 
     doc.status = DocumentStatus.ACTIVE
@@ -127,7 +185,7 @@ async def finalize_document_activation(
         event_tag="DOC_ACTIVATED",
         category=AuditCategory.DOCUMENT,
         status_code=200,
-        details=f"Document '{doc.filename}' v{doc.version} is now active (is_live=True)",
+        details=f"document_id={doc.id}; version={doc.version}; is_live=true",
     )
     return doc
 
@@ -135,7 +193,7 @@ async def finalize_document_activation(
 async def mark_document_failed(
     session: AsyncSession,
     doc_id: uuid.UUID,
-    error_message: str,
+    error_message: Exception | str,
 ) -> None:
     """Marks document ingestion as UPDATE_FAILED (Decision D4 recovery)."""
     stmt = select(Document).where(Document.id == doc_id)
@@ -147,12 +205,33 @@ async def mark_document_failed(
         doc.updated_at = datetime.now(timezone.utc)
         session.add(doc)
         await session.commit()
+        # SQL failure state alone is insufficient: Qdrant applies its own is_live filter.
+        try:
+            from backend.db.qdrant import get_qdrant_client
+            client = get_qdrant_client()
+            client.set_payload(
+                collection_name=settings.QDRANT_COLLECTION,
+                payload={"is_live": False},
+                points=models.Filter(
+                    must=[models.FieldCondition(key="document_id", match=models.MatchValue(value=str(doc.id)))]
+                ),
+            )
+        except Exception:
+            logger.exception("Could not quarantine failed document vectors document_id=%s", doc.id)
+        safe_error = str(error_message)[:900]
+        safe_error = re.sub(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", "[EMAIL]", safe_error)
+        safe_error = re.sub(r"\b(?:\+91[-.\s]?)?[6-9]\d{9}\b", "[PHONE]", safe_error)
+        safe_error = re.sub(r"[A-Za-z]:\\[^\s]+", "[LOCAL_PATH]", safe_error)
+        safe_error = re.sub(r"/(?:home|Users|tmp|var/tmp)/[^\s]+", "[LOCAL_PATH]", safe_error)
+        await record_document_processing_log(
+            session, doc.id, "processing", "FAILED", f"{type(error_message).__name__}: {safe_error}"
+        )
         await log_audit_event(
             session=session,
             event_tag="DOC_UPDATE_FAILED",
             category=AuditCategory.DOCUMENT,
             status_code=500,
-            details=f"Ingestion failed for '{doc.filename}' v{doc.version}: {error_message[:200]}",
+            details=f"document_id={doc.id}; version={doc.version}; failure_recorded=true",
         )
 
 
@@ -186,11 +265,21 @@ async def delete_document(
     )
 
     # 2. Delete row from SQL database
-    doc_title = doc.title
-    doc_filename = doc.filename
+    doc_id_value = doc.id
     doc_version = doc.version
+    storage_path = doc.storage_path
+    log_result = await session.execute(
+        select(DocumentProcessingLog).where(DocumentProcessingLog.document_id == doc.id)
+    )
+    for processing_log in log_result.scalars().all():
+        await session.delete(processing_log)
     await session.delete(doc)
     await session.commit()
+    if storage_path:
+        try:
+            Path(storage_path).unlink(missing_ok=True)
+        except OSError:
+            logger.warning("Could not remove stored source for document_id=%s", doc_id_value, exc_info=True)
 
     # 3. Log audit event
     await log_audit_event(
@@ -198,21 +287,21 @@ async def delete_document(
         event_tag="DOC_DELETED",
         category=AuditCategory.DOCUMENT,
         status_code=200,
-        details=f"Purged document '{doc_filename}' v{doc_version} (id={doc_id})",
+        details=f"document_id={doc_id_value}; version={doc_version}; deleted=true",
     )
 
 
-async def list_documents_for_user(
+async def list_documents_for_user_page(
     session: AsyncSession,
     user: User,
     department: Optional[str] = None,
-) -> List[Document]:
-    """
-    Returns documents filtered by 3D RBAC:
-    - Admin: All documents.
-    - Employee/Manager: Only documents matching user department and clearance rank, plus Public documents.
-    """
-    stmt = select(Document)
+    search: Optional[str] = None,
+    status_filter: Optional[DocumentStatus] = None,
+    page: int = 1,
+    page_size: int = 25,
+) -> Tuple[List[Document], int]:
+    """Returns a page of documents with the same RBAC rules used by retrieval."""
+    conditions = []
 
     if user.role != Role.ADMIN:
         allowed_clearances = [
@@ -226,15 +315,43 @@ async def list_documents_for_user(
                 col(Document.clearance_level).in_(allowed_clearances),
             ),
         )
-        stmt = stmt.where(rbac_condition)
+        # Locked/staged versions are intentionally invisible to non-admin users.
+        conditions.extend([rbac_condition, Document.is_live.is_(True)])
 
     if department:
-        stmt = stmt.where(Document.department == department)
+        conditions.append(Document.department == department)
+    if search:
+        term = f"%{search.strip()}%"
+        conditions.append(or_(Document.title.ilike(term), Document.filename.ilike(term)))
+    if status_filter:
+        conditions.append(Document.status == status_filter)
 
-    stmt = stmt.order_by(col(Document.uploaded_at).desc())
-    res = await session.execute(stmt)
-    return list(res.scalars().all())
+    count_stmt = select(func.count(Document.id))
+    data_stmt = select(Document)
+    if conditions:
+        count_stmt = count_stmt.where(*conditions)
+        data_stmt = data_stmt.where(*conditions)
 
+    total = int((await session.execute(count_stmt)).scalar_one() or 0)
+    data_stmt = (
+        data_stmt.order_by(col(Document.uploaded_at).desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    result = await session.execute(data_stmt)
+    return list(result.scalars().all()), total
+
+
+async def list_documents_for_user(
+    session: AsyncSession,
+    user: User,
+    department: Optional[str] = None,
+) -> List[Document]:
+    """Backward-compatible unpaginated helper for internal callers/tests."""
+    docs, _ = await list_documents_for_user_page(
+        session=session, user=user, department=department, page=1, page_size=10000
+    )
+    return docs
 
 async def get_document_by_id(
     session: AsyncSession,
@@ -249,6 +366,8 @@ async def get_document_by_id(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
 
     if user.role != Role.ADMIN:
+        if not doc.is_live:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
         if doc.clearance_level != ClearanceLevel.PUBLIC:
             if doc.department != user.department:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied: department mismatch")

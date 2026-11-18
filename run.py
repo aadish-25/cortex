@@ -133,8 +133,93 @@ def shutdown_all(*args) -> None:
             except Exception as e:
                 log("SYSTEM", RED, f"Error terminating {name}: {e}")
 
-    log("SYSTEM", BOLD + GREEN, "All services stopped cleanly. Terminal released. Goodbye!\n")
+    log("SYSTEM", BOLD + GREEN, "Application processes stopped. Docker data services are left running.\n")
     sys.exit(0)
+
+
+def ensure_environment_file() -> bool:
+    env_file = BASE_DIR / ".env"
+    example_file = BASE_DIR / ".env.example"
+    if env_file.exists():
+        return True
+    if not example_file.exists():
+        log("CONFIG", RED, "Missing .env and .env.example. Cannot start Cortex.")
+        return False
+    shutil.copyfile(example_file, env_file)
+    log("CONFIG", YELLOW, "Created .env from .env.example. Add your provider keys before using chat integrations.")
+    return True
+
+
+def prepare_python_environment() -> str | None:
+    """Install/sync Python dependencies and return the interpreter to launch services with."""
+    venv_python = BASE_DIR / ".venv" / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+    uv_cmd = shutil.which("uv")
+    if uv_cmd:
+        log("PYTHON", CYAN, "Syncing Python dependencies from uv.lock...")
+        try:
+            subprocess.run([uv_cmd, "sync", "--frozen"], cwd=str(BASE_DIR), check=True)
+        except subprocess.CalledProcessError:
+            log("PYTHON", RED, "uv sync failed. Check the Python version and dependency errors above.")
+            return None
+        return str(venv_python) if venv_python.exists() else sys.executable
+
+    if venv_python.exists():
+        return str(venv_python)
+
+    try:
+        import fastapi  # noqa: F401
+        import uvicorn  # noqa: F401
+        import celery  # noqa: F401
+        import sqlmodel  # noqa: F401
+        import qdrant_client  # noqa: F401
+        import redis  # noqa: F401
+        import pydantic_settings  # noqa: F401
+        return sys.executable
+    except ImportError:
+        log("PYTHON", YELLOW, "Python dependencies are missing. Installing the project with pip...")
+        try:
+            subprocess.run([sys.executable, "-m", "pip", "install", "-e", str(BASE_DIR)], check=True)
+            return sys.executable
+        except subprocess.CalledProcessError:
+            log("PYTHON", RED, "Dependency installation failed. Install Python 3.14 and run 'uv sync'.")
+            return None
+
+
+def prepare_frontend_dependencies() -> str | None:
+    npm_cmd = shutil.which("npm.cmd") or shutil.which("npm")
+    if not npm_cmd:
+        log("FRONTEND", RED, "Node.js/npm was not found. Install Node.js 18+ before starting the frontend.")
+        return None
+    lock_file = FRONTEND_DIR / "package-lock.json"
+    package_file = FRONTEND_DIR / "package.json"
+    needs_install = (
+        not (FRONTEND_DIR / "node_modules").exists()
+        or not lock_file.exists()
+        or package_file.stat().st_mtime > lock_file.stat().st_mtime
+    )
+    if needs_install:
+        log("FRONTEND", CYAN, "Installing/synchronizing frontend dependencies...")
+        try:
+            command = ["cmd", "/c", npm_cmd, "install"] if sys.platform == "win32" else [npm_cmd, "install"]
+            subprocess.run(command, cwd=str(FRONTEND_DIR), check=True)
+        except subprocess.CalledProcessError:
+            log("FRONTEND", RED, "npm install failed. Check your Node.js version and network connection.")
+            return None
+    return npm_cmd
+
+
+def start_process(command: list[str], name: str, prefix: str, color: str, cwd: Path = BASE_DIR) -> subprocess.Popen:
+    proc = subprocess.Popen(
+        command,
+        cwd=str(cwd),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    active_processes.append((proc, name))
+    threading.Thread(target=stream_output, args=(proc.stdout, prefix, color), daemon=True).start()
+    return proc
 
 
 def main() -> None:
@@ -152,56 +237,39 @@ def main() -> None:
     print(f" Press {BOLD}Ctrl+C{RESET} to stop all services simultaneously.")
     print("=" * 60)
 
-    # 1. Ensure Docker & infrastructure containers are online
+    # 1. Prepare local configuration and runtimes.
+    if not ensure_environment_file():
+        sys.exit(1)
+    python_exe = prepare_python_environment()
+    if not python_exe:
+        sys.exit(1)
+    npm_cmd = prepare_frontend_dependencies()
+    if not npm_cmd:
+        sys.exit(1)
+
+    # 2. Ensure Docker & infrastructure containers are online.
     if not check_and_start_docker():
         log("DOCKER", BOLD + RED, "Startup halted: Required Docker containers could not be started.")
         log("DOCKER", YELLOW, "Please ensure Docker Desktop is running, then run 'python run.py' again.")
         sys.exit(1)
 
-    # 2. Launch Backend (FastAPI / Uvicorn)
-    python_exe = sys.executable
-    backend_cmd = [
-        python_exe,
-        "-m",
-        "uvicorn",
-        "backend.main:app",
-        "--reload",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "8000",
-    ]
-    log("BACKEND", GREEN, f"Starting FastAPI backend on http://localhost:8000 (PID pending)...")
+    # 3. Launch FastAPI.
+    backend_cmd = [python_exe, "-m", "uvicorn", "backend.main:app", "--reload", "--host", "0.0.0.0", "--port", "8000"]
+    log("BACKEND", GREEN, "Starting FastAPI backend on http://localhost:8000...")
+    backend_proc = start_process(backend_cmd, "Backend (FastAPI)", "BACKEND", GREEN)
 
-    backend_proc = subprocess.Popen(
-        backend_cmd,
-        cwd=str(BASE_DIR),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-    )
-    active_processes.append((backend_proc, "Backend (FastAPI)"))
-    threading.Thread(target=stream_output, args=(backend_proc.stdout, "BACKEND", GREEN), daemon=True).start()
+    # 4. Launch Celery worker and beat for document reindexing and scheduled reconciliation.
+    worker_cmd = [python_exe, "-m", "celery", "-A", "backend.worker.celery_app.celery_app", "worker", "--loglevel=INFO", "--pool=solo"]
+    beat_cmd = [python_exe, "-m", "celery", "-A", "backend.worker.celery_app.celery_app", "beat", "--loglevel=INFO"]
+    log("WORKER", CYAN, "Starting Celery worker for document indexing...")
+    start_process(worker_cmd, "Celery Worker", "WORKER", CYAN)
+    log("WORKER", CYAN, "Starting Celery Beat for scheduled reconciliation...")
+    start_process(beat_cmd, "Celery Beat", "BEAT", CYAN)
 
-    # 3. Launch Frontend (React + Vite, when Phase 8 is implemented)
-    has_frontend = (FRONTEND_DIR / "package.json").exists()
-    if has_frontend:
-        npm_cmd = shutil.which("npm.cmd") or shutil.which("npm") or "npm"
-        log("FRONTEND", MAGENTA, f"Starting React frontend via '{npm_cmd} run dev' on http://localhost:5173...")
-        frontend_proc = subprocess.Popen(
-            [npm_cmd, "run", "dev"],
-            cwd=str(FRONTEND_DIR),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        )
-        active_processes.append((frontend_proc, "Frontend (Vite)"))
-        threading.Thread(target=stream_output, args=(frontend_proc.stdout, "FRONTEND", MAGENTA), daemon=True).start()
-    else:
-        log("FRONTEND", YELLOW, "Frontend directory not found yet (scheduled for Phase 8). Backend-only mode active.")
-        log("FRONTEND", YELLOW, "Once frontend is initialized, it will automatically launch and stream here.")
+    # 5. Launch the React/Vite frontend.
+    log("FRONTEND", MAGENTA, "Starting React frontend on http://localhost:5173...")
+    frontend_cmd = ["cmd", "/c", npm_cmd, "run", "dev"] if sys.platform == "win32" else [npm_cmd, "run", "dev"]
+    start_process(frontend_cmd, "Frontend (Vite)", "FRONTEND", MAGENTA, cwd=FRONTEND_DIR)
 
     log("SYSTEM", BOLD + GREEN, "Cortex is live! Terminal is locked. Press Ctrl+C at any time to exit.")
 
@@ -209,10 +277,11 @@ def main() -> None:
     try:
         while True:
             time.sleep(0.5)
-            # If backend crashes unexpectedly, notify
-            if backend_proc.poll() is not None and not is_shutting_down:
-                log("BACKEND", RED, f"Backend process exited unexpectedly with code {backend_proc.returncode}.")
-                shutdown_all()
+            # If any core service exits unexpectedly, stop the full stack.
+            for process, name in active_processes:
+                if process.poll() is not None and not is_shutting_down:
+                    log("SYSTEM", RED, f"{name} exited unexpectedly with code {process.returncode}.")
+                    shutdown_all()
     except KeyboardInterrupt:
         shutdown_all()
 

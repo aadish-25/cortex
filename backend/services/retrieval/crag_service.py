@@ -52,7 +52,7 @@ async def execute_crag_recovery(
     5. If still < 0.35, routes to Decision D9 Updating Policy Probe or safe fallback.
     6. Strictly single-pass (no loops).
     """
-    logger.info("Executing Single-Pass CRAG recovery for fuzzy query: '%s'", original_query)
+    logger.info("Executing single-pass CRAG recovery for a fuzzy query")
 
     # 1. Reformulate query
     crag_query = reformulate_query_for_crag(original_query)

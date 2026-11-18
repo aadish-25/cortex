@@ -28,9 +28,9 @@ services:
     container_name: cortex-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: cortex
-      POSTGRES_PASSWORD: cortex_dev_password
-      POSTGRES_DB: cortex_db
+      POSTGRES_USER: ${POSTGRES_USER:-cortex}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cortex_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-cortex_db}
     ports:
       - "5432:5432"
     volumes:

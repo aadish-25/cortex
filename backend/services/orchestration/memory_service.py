@@ -81,6 +81,7 @@ class MemoryService:
             conv = res.scalar_one_or_none()
             if conv:
                 return conv
+            raise ValueError("Conversation not found or access denied")
 
         # Provision new conversation
         new_conv = Conversation(
@@ -102,8 +103,11 @@ class MemoryService:
         conversation_id: uuid.UUID,
         sender: str,
         content: str,
-        citations: Optional[List[str]] = None,
+        citations: Optional[Any] = None,
         message_id: Optional[uuid.UUID] = None,
+        parent_message_id: Optional[uuid.UUID] = None,
+        variant_index: int = 1,
+        is_complete: bool = True,
     ) -> Message:
         """Persists a new user or assistant message to the database."""
         cites_json = json.dumps(citations) if citations else None
@@ -113,6 +117,9 @@ class MemoryService:
             sender=sender,
             content=content,
             citations=cites_json,
+            parent_message_id=parent_message_id,
+            variant_index=variant_index,
+            is_complete=is_complete,
             created_at=datetime.now(timezone.utc),
         )
         session.add(msg)

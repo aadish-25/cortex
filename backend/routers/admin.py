@@ -19,19 +19,28 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import select
 
 from backend.core.security import require_roles
 from backend.db.database import get_db
 from backend.models.enums import AuditCategory, Role
 from backend.models.user import User
+from backend.models.document import Document
+from backend.models.query_quality import QueryQualityLog
 from backend.services.admin.admin_service import (
     get_document_status,
+    count_audit_logs,
+    get_quality_analytics,
+    list_low_confidence_queries,
+    list_document_processing_logs,
+    mark_quality_query_reviewed,
     get_feedback_analytics,
     get_query_analytics,
     get_token_usage_analytics,
     inspect_system_health,
     query_audit_logs,
     replace_document_version,
+    rollback_document_version,
     trigger_document_reindex,
 )
 
@@ -75,7 +84,9 @@ async def get_audit_logs(
     Optionally filter by AuditCategory (AUTH, DOCUMENT, QUERY, WORKFLOW, ADMIN).
     """
     logs = await query_audit_logs(session, category=category, limit=limit, offset=offset)
+    total = await count_audit_logs(session, category=category)
     return {
+        "total": total,
         "total_returned": len(logs),
         "offset": offset,
         "limit": limit,
@@ -154,13 +165,17 @@ async def reindex_document(
     try:
         result = await trigger_document_reindex(session, doc_id)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        message = str(exc)
+        code = status.HTTP_404_NOT_FOUND if "not found" in message.lower() else status.HTTP_400_BAD_REQUEST if "original file" in message.lower() else status.HTTP_503_SERVICE_UNAVAILABLE
+        raise HTTPException(status_code=code, detail=message) from exc
 
     if result.get("status") == "ALREADY_UPDATING":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=result["message"],
         )
+    if result.get("status") == "REINDEX_PENDING":
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=result["message"])
 
     return result
 
@@ -186,20 +201,122 @@ async def replace_document(
     Registers a new version of the specified document with the provided file bytes.
     The new version is staged with status=UPDATING and is_live=False until activated.
     """
-    content = await file.read()
+    content = await file.read(25 * 1024 * 1024 + 1)
+    if len(content) > 25 * 1024 * 1024:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Document exceeds the 25 MB upload limit")
     try:
-        return await replace_document_version(
+        result = await replace_document_version(
             session=session,
             doc_id=doc_id,
             file_bytes=content,
             new_filename=file.filename,
         )
+        if result.get("status") == "REINDEX_PENDING":
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=result["message"])
+        return result
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        code = status.HTTP_404_NOT_FOUND if "not found" in str(exc).lower() else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.get("/documents/{doc_id}/logs", summary="Paginated document processing history")
+async def document_processing_logs(
+    doc_id: uuid.UUID,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=100),
+    session: AsyncSession = Depends(get_db),
+    _admin: User = Depends(_require_admin),
+) -> Dict[str, Any]:
+    document_result = await session.execute(select(Document).where(Document.id == doc_id))
+    if document_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    records, total = await list_document_processing_logs(session, doc_id, page, page_size)
+    return {
+        "items": [
+            {"id": str(item.id), "stage": item.stage, "status": item.status, "message": item.message, "created_at": item.created_at.isoformat()}
+            for item in records
+        ],
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "total_pages": (total + page_size - 1) // page_size,
+    }
+
+
+@router.post(
+    "/documents/{doc_id}/rollback",
+    summary="Restore the previous active document version",
+    response_model=Dict[str, Any],
+)
+async def rollback_document(
+    doc_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db),
+    _admin: User = Depends(_require_admin),
+) -> Dict[str, Any]:
+    try:
+        return await rollback_document_version(session, doc_id)
+    except ValueError as exc:
+        code = status.HTTP_404_NOT_FOUND if "not found" in str(exc).lower() else status.HTTP_409_CONFLICT
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Could not safely restore the previous version") from exc
+
+
+@router.get("/analytics/quality", summary="RAG quality analytics", response_model=Dict[str, Any])
+async def quality_analytics(
+    days: int = Query(default=7, ge=1, le=90),
+    session: AsyncSession = Depends(get_db),
+    _admin: User = Depends(_require_admin),
+) -> Dict[str, Any]:
+    return await get_quality_analytics(session, days=days)
+
+
+@router.get("/quality/low-confidence", summary="Paginated low-confidence query review queue")
+async def low_confidence_queries(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=100),
+    reviewed: Optional[bool] = Query(default=False),
+    session: AsyncSession = Depends(get_db),
+    _admin: User = Depends(_require_admin),
+) -> Dict[str, Any]:
+    records, total = await list_low_confidence_queries(
+        session, page=page, page_size=page_size, reviewed=reviewed
+    )
+    return {
+        "items": [
+            {
+                "id": str(item.id),
+                "query_preview": item.query_preview,
+                "confidence": item.confidence,
+                "top_reranker_score": item.top_reranker_score,
+                "is_fallback": item.is_fallback,
+                "created_at": item.created_at.isoformat(),
+                "reviewed_at": item.reviewed_at.isoformat() if item.reviewed_at else None,
+            }
+            for item in records
+        ],
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "total_pages": (total + page_size - 1) // page_size,
+    }
+
+
+@router.patch("/quality/low-confidence/{quality_id}/review", summary="Mark a quality record reviewed")
+async def review_quality_query(
+    quality_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db),
+    admin: User = Depends(_require_admin),
+) -> Dict[str, Any]:
+    try:
+        record = await mark_quality_query_reviewed(session, quality_id, admin.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"id": str(record.id), "reviewed_at": record.reviewed_at.isoformat() if record.reviewed_at else None}
 
 
 # ---------------------------------------------------------------------------

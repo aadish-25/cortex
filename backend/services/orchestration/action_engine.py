@@ -121,7 +121,7 @@ class ActionEngine:
         )
 
         if not guard_result.is_feasible:
-            logger.info("ActionDraft rejected by ActionGuard for user %s: %s", user.email, guard_result.refusal_reason)
+            logger.info("ActionDraft rejected by ActionGuard for user_id=%s", user.id)
             raise ActionInfeasibleError(guard_result.refusal_reason)
 
         target_project = jira_service.resolve_project_key(guard_result.department)
@@ -353,7 +353,7 @@ class ActionEngine:
         await session.commit()
         await session.refresh(draft)
 
-        logger.info("Discarded ActionDraft %s by user %s", draft.id, user.email)
+        logger.info("Discarded ActionDraft %s by user_id=%s", draft.id, user.id)
         return self._to_response(draft)
 
 

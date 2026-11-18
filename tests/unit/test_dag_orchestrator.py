@@ -298,3 +298,29 @@ async def test_execute_task_google_drive_search(monkeypatch):
         assert len(citations) > 0
         assert any("docs.google.com" in c for c in citations)
 
+
+
+def test_topological_layers_resolve_out_of_order_dependencies():
+    from backend.services.orchestration.dag_orchestrator import _topological_layers
+
+    tasks = [
+        PlanTask(id=3, type=PlanTaskType.ACTION_WORKFLOW, query="create ticket", depends_on=[2]),
+        PlanTask(id=2, type=PlanTaskType.INTERNAL_RAG, query="policy", depends_on=[1]),
+        PlanTask(id=1, type=PlanTaskType.STRUCTURED_LOOKUP, query="leave balance", depends_on=[]),
+    ]
+    layers = _topological_layers(tasks)
+    assert [[task.id for task in layer] for layer in layers] == [[1], [2], [3]]
+
+
+def test_topological_layers_reject_cycles_and_missing_dependencies():
+    from backend.services.orchestration.dag_orchestrator import _topological_layers
+
+    cycle = [
+        PlanTask(id=1, type=PlanTaskType.INTERNAL_RAG, query="a", depends_on=[2]),
+        PlanTask(id=2, type=PlanTaskType.INTERNAL_RAG, query="b", depends_on=[1]),
+    ]
+    missing = [PlanTask(id=1, type=PlanTaskType.INTERNAL_RAG, query="a", depends_on=[99])]
+    with pytest.raises(ValueError, match="cycle"):
+        _topological_layers(cycle)
+    with pytest.raises(ValueError, match="missing dependencies"):
+        _topological_layers(missing)

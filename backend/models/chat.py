@@ -4,6 +4,7 @@ from typing import Any, ClassVar, Dict, List, Optional
 import uuid
 from pydantic import BaseModel
 from sqlmodel import Field, SQLModel
+from sqlalchemy import UniqueConstraint
 
 from backend.models.enums import FeedbackCategory
 
@@ -38,11 +39,13 @@ class Message(SQLModel, table=True):
         description="Linked parent for regenerated variants",
     )
     variant_index: int = Field(default=1, description="Variant version number, e.g. 1, 2")
+    is_complete: bool = Field(default=True, description="False when generation was interrupted and the saved answer is partial")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class MessageFeedback(SQLModel, table=True):
     __tablename__: ClassVar[str] = "message_feedback"
+    __table_args__ = (UniqueConstraint("message_id", "user_id", name="uq_message_feedback_user"),)
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     message_id: uuid.UUID = Field(foreign_key="messages.id", index=True)
@@ -76,6 +79,7 @@ class PlanTaskType(str, Enum):
     ACTION_WORKFLOW = "ACTION_WORKFLOW"    # HITL Jira ticketing (Phase 4)
     GITHUB_SEARCH = "GITHUB_SEARCH"        # Read-only code, PRs, issues (Phase 6)
     DRIVE_SEARCH = "DRIVE_SEARCH"          # Read-only Shared Drive & Docs (Phase 6)
+    ADMIN_OPERATION = "ADMIN_OPERATION"    # Privileged operational inspection/reindex tools
     DIRECT_CHAT = "DIRECT_CHAT"            # Chit-chat, greetings, clarifications
 
 

@@ -73,7 +73,7 @@ class GoogleDriveService:
         target_folder = folder_id or self.root_folder_id
 
         if not self.is_configured:
-            logger.info("Google Drive credentials not set. Returning sandbox search results for query: '%s'", query)
+            logger.info("Google Drive credentials not set; returning sandbox search results")
             return {
                 "status": "SUCCESS",
                 "query": query,

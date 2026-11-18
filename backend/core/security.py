@@ -83,7 +83,7 @@ async def get_current_user(
             )
         user_id = uuid.UUID(user_id_raw)
         token_version = token_version_raw
-    except jwt.PyJWTError, ValueError:
+    except (jwt.PyJWTError, ValueError):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",

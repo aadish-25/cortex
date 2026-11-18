@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from qdrant_client import QdrantClient
 from sqlalchemy.ext.asyncio import AsyncSession
+from backend.db.database import async_session
 
 from backend.models.chat import ChatMessage, ExecutionPlan, PlanTask, PlanTaskType
 from backend.models.user import User
@@ -28,6 +29,8 @@ class OrchestratorResponse:
     evidence_chunks: List[Dict[str, Any]] = field(default_factory=list)  # F8: [{anchor, chunk_id, citation, section}]
     action_draft: Optional[Dict[str, Any]] = None
     confidence: ConfidenceLevel = ConfidenceLevel.HIGH
+    reranker_scores: List[float] = field(default_factory=list)
+    top_reranker_score: Optional[float] = None
 
 
 async def execute_task(
@@ -36,13 +39,14 @@ async def execute_task(
     session: AsyncSession,
     user: User,
     scoped_upstream_context: Dict[int, Any],
+    retrieval_top_k: int = 5,
 ) -> tuple[Any, List[str]]:
     """
     Executes a single sub-task with strict context isolation (Decision D24).
     The task ONLY sees upstream context from tasks declared in its `depends_on`.
     Returns (output, citations).
     """
-    logger.info("Executing Sub-Task %d [%s]: '%s' (depends_on=%s)", task.id, task.type.value, task.query, task.depends_on)
+    logger.info("Executing Sub-Task %d [%s] (depends_on=%s)", task.id, task.type.value, task.depends_on)
 
     # 1. Internal RAG Search
     if task.type == PlanTaskType.INTERNAL_RAG:
@@ -50,7 +54,7 @@ async def execute_task(
             client=client,
             user=user,
             query=task.query,
-            top_k=5,
+            top_k=retrieval_top_k,
         )
 
         # Trigger Single-Pass CRAG if score is in fuzzy zone
@@ -81,6 +85,8 @@ async def execute_task(
         web_results: List[WebSearchResult] = await execute_web_search(
             query=task.query,
             max_results=3,
+            user_id=user.id,
+            session=session,
         )
         # F2 Fix: empty list means search was unavailable — return structured unavailable dict
         if not web_results:
@@ -159,7 +165,12 @@ async def execute_task(
             citations = [item.get("html_url") for item in gh_result.get("items", []) if item.get("html_url")]
         return gh_result, citations
 
-    # 7. Google Drive Shared Documents Discovery (Phase 6.2 MCP)
+    # 7. Privileged administrative operations (strictly Admin-only)
+    elif task.type == PlanTaskType.ADMIN_OPERATION:
+        from backend.services.admin.admin_agent import admin_agent
+        return await admin_agent.execute_from_query(session=session, user=user, query=task.query), []
+
+    # 8. Google Drive Shared Documents Discovery (Phase 6.2 MCP)
     elif task.type == PlanTaskType.DRIVE_SEARCH:
         from backend.services.integrations.google_drive_service import google_drive_service
         drive_result = await google_drive_service.search_files(query=task.query)
@@ -221,9 +232,17 @@ def synthesis_join_node(
                 )
 
         elif isinstance(output, list) and output and isinstance(output[0], WebSearchResult):
-            # F3 Fix: Use sandboxed_xml (Decision D25 isolation) instead of bare snippets
+            # F3 Fix: Use sandboxed_xml (Decision D25 isolation) and give external sources stable anchors.
             xml_blocks = "\n".join(w.sandboxed_xml for w in output)
-            response_sections.append(f"<external_web_sources>\n{xml_blocks}\n</external_web_sources>")
+            external_index = []
+            for source in output:
+                anchor_counter += 1
+                citation_map[anchor_counter] = f"{source.title} — {source.url}"
+                external_index.append(f"[{anchor_counter}] {source.title} — {source.url}")
+            response_sections.append(
+                f"<external_web_sources>\n{xml_blocks}\n</external_web_sources>\n"
+                + "External citation map:\n" + "\n".join(external_index)
+            )
 
         elif isinstance(output, str):
             response_sections.append(output)
@@ -234,10 +253,12 @@ def synthesis_join_node(
             elif output.get("status") == "ACTION_REFUSED":
                 response_sections.append(f"**Action Notice:** {output.get('message')}")
             elif output.get("status") == "RATE_LIMITED":
-                response_sections.append(f"> ⚠️ {output.get('message')}")
+                response_sections.append(f"> {output.get('message')}")
             elif output.get("status") == "SEARCH_UNAVAILABLE":
                 # F2 Fix: Search unavailable — do not fabricate sources
-                response_sections.append(f"> ℹ️ {output.get('message')}")
+                response_sections.append(f"> {output.get('message')}")
+            elif output.get("status") == "ADMIN_TOOL_RESULT":
+                response_sections.append(output.get("message", "Administrative operation completed."))
             elif output.get("items"):  # GitHub code search
                 items = [f"- [`{item['name']}`]({item['html_url']}): {item.get('path')}" for item in output["items"]]
                 response_sections.append(f"### GitHub Code Search ({output.get('query')})\n" + "\n".join(items))
@@ -258,80 +279,101 @@ def synthesis_join_node(
     return "\n\n".join(response_sections), citation_map, evidence_chunks
 
 
+def _topological_layers(tasks: List[PlanTask]) -> List[List[PlanTask]]:
+    """Validate task IDs/dependencies and return deterministic topological layers."""
+    by_id = {task.id: task for task in tasks}
+    if len(by_id) != len(tasks):
+        raise ValueError("Execution plan contains duplicate task IDs")
+    for task in tasks:
+        if task.id in task.depends_on:
+            raise ValueError(f"Task {task.id} cannot depend on itself")
+        missing = set(task.depends_on) - set(by_id)
+        if missing:
+            raise ValueError(f"Task {task.id} references missing dependencies: {sorted(missing)}")
+
+    completed: set[int] = set()
+    remaining = set(by_id)
+    layers: List[List[PlanTask]] = []
+    while remaining:
+        ready_ids = sorted(
+            task_id for task_id in remaining
+            if set(by_id[task_id].depends_on).issubset(completed)
+        )
+        if not ready_ids:
+            raise ValueError("Execution plan contains a dependency cycle")
+        layers.append([by_id[task_id] for task_id in ready_ids])
+        completed.update(ready_ids)
+        remaining.difference_update(ready_ids)
+    return layers
+
+
 async def orchestrate_dag_execution(
     client: QdrantClient,
     session: AsyncSession,
     user: User,
     query: str,
     history: Optional[List[ChatMessage]] = None,
+    retrieval_top_k: int = 5,
 ) -> OrchestratorResponse:
-    """
-    Master DAG Execution Engine (Decision D24 & D26):
-    1. Query Planner: Rewriting + Decomposition into DAG tasks.
-    2. Topological Concurrency: Independent tasks run in parallel via asyncio.gather.
-    3. Strict Context Isolation: Dependent tasks receive only declared upstream context.
-    4. Synthesis Join: Assembles final markdown response with unified citations.
-    """
-    # Step 1: Generate Execution Plan
-    plan = await plan_and_decompose_query(query=query, history=history)
+    """Plan and execute a validated DAG in concurrent topological layers.
 
+    Each task in a concurrent layer receives its own AsyncSession because
+    SQLAlchemy AsyncSession instances are not safe for concurrent use.
+    """
+    plan = await plan_and_decompose_query(query=query, history=history, user_role=user.role.value)
+    layers = _topological_layers(plan.tasks)
     task_outputs: Dict[int, Any] = {}
     all_citations: List[str] = []
 
-    # Step 2: Separate independent and dependent tasks
-    independent_tasks = [t for t in plan.tasks if not t.depends_on]
-    dependent_tasks = [t for t in plan.tasks if t.depends_on]
+    async def run_task(task: PlanTask, layer_size: int) -> tuple[int, Any, List[str]]:
+        upstream = {dep_id: task_outputs[dep_id] for dep_id in task.depends_on}
+        if layer_size > 1:
+            async with async_session() as isolated_session:
+                out, cites = await execute_task(task, client, isolated_session, user, upstream, retrieval_top_k=retrieval_top_k)
+        else:
+            out, cites = await execute_task(task, client, session, user, upstream, retrieval_top_k=retrieval_top_k)
+        return task.id, out, cites
 
-    # Step 3: Execute independent tasks concurrently via asyncio.gather()
-    if independent_tasks:
-        async def run_independent(t: PlanTask):
-            out, cites = await execute_task(t, client, session, user, scoped_upstream_context={})
-            t.status = "COMPLETED"
-            t.output = out
-            t.citations = cites
-            return t.id, out, cites
+    for layer in layers:
+        # A task is marked complete only after its output has been produced.
+        results = await asyncio.gather(*(run_task(task, len(layer)) for task in layer))
+        for task_id, output, citations in results:
+            task_outputs[task_id] = output
+            task = next(item for item in plan.tasks if item.id == task_id)
+            task.status = "COMPLETED"
+            task.output = output
+            task.citations = citations
+            all_citations.extend(citations)
 
-        results = await asyncio.gather(*[run_independent(t) for t in independent_tasks])
-        for tid, out, cites in results:
-            task_outputs[tid] = out
-            all_citations.extend(cites)
-
-    # Step 4: Execute dependent tasks in topological sequence
-    for task in dependent_tasks:
-        # Strict Context Scoping (Zero Pollution): Extract ONLY declared dependencies
-        scoped_upstream = {
-            dep_id: task_outputs.get(dep_id)
-            for dep_id in task.depends_on
-            if dep_id in task_outputs
-        }
-        out, cites = await execute_task(task, client, session, user, scoped_upstream)
-        task.status = "COMPLETED"
-        task.output = out
-        task.citations = cites
-        task_outputs[task.id] = out
-        all_citations.extend(cites)
-
-    # Step 5: Synthesis Join Node
     final_text, citation_map, evidence_chunks = synthesis_join_node(plan, task_outputs, all_citations)
 
-    # Determine overall confidence and extract action draft if present
     overall_confidence = ConfidenceLevel.HIGH
     action_draft_payload = None
-    for out in task_outputs.values():
-        if isinstance(out, SearchResult) and out.confidence == ConfidenceLevel.LOW:
-            overall_confidence = ConfidenceLevel.LOW
-        elif isinstance(out, dict) and out.get("status") == "ACTION_DRAFT_PENDING" and out.get("draft"):
-            action_draft_payload = out["draft"]
+    for output in task_outputs.values():
+        if isinstance(output, SearchResult):
+            if output.confidence == ConfidenceLevel.LOW:
+                overall_confidence = ConfidenceLevel.LOW
+            elif output.confidence == ConfidenceLevel.FUZZY and overall_confidence == ConfidenceLevel.HIGH:
+                overall_confidence = ConfidenceLevel.FUZZY
+        elif isinstance(output, dict) and output.get("status") == "ACTION_DRAFT_PENDING" and output.get("draft"):
+            action_draft_payload = output["draft"]
 
-    # Deduplicate citations
-    deduped_citations = list(dict.fromkeys(all_citations))
-
+    # Citation anchors are assigned in synthesis order; this is the canonical list sent to the UI.
+    anchored_citations = list(citation_map.values())
+    reranker_scores = [
+        float(chunk.score)
+        for output in task_outputs.values()
+        if isinstance(output, SearchResult)
+        for chunk in output.chunks
+    ]
     return OrchestratorResponse(
         plan=plan,
         final_response=final_text,
-        citations=deduped_citations,
-        citation_map=citation_map,  # F4: numbered anchor map
-        evidence_chunks=evidence_chunks,  # F8: exact chunk_ids for evidence drawer
+        citations=anchored_citations,
+        citation_map=citation_map,
+        evidence_chunks=evidence_chunks,
         action_draft=action_draft_payload,
         confidence=overall_confidence,
+        reranker_scores=reranker_scores,
+        top_reranker_score=max(reranker_scores) if reranker_scores else None,
     )

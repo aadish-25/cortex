@@ -96,7 +96,7 @@ async def probe_updating_policies(
 
         if doc and doc.status == DocumentStatus.UPDATING:
             doc_title = doc.title or doc.filename
-            logger.info("Decision D9 triggered: Matched updating document '%s' for user %s", doc_title, user.username)
+            logger.info("Updating-document guard triggered for user_id=%s document_id=%s", user.id, doc.id)
             return (
                 f"Notice: The official policy regarding '{doc_title}' is currently undergoing an administrative update. "
                 f"To prevent unauthorized dissemination of draft policies, retrieved information is restricted until the updated document is published."

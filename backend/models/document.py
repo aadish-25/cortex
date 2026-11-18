@@ -18,6 +18,7 @@ class Document(DocumentBase, table=True):
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     file_hash: str = Field(index=True, description="SHA-256 hash of file content for deduplication")
+    storage_path: Optional[str] = Field(default=None, nullable=True, description="Server-side path to the original file for safe reindexing")
     version: int = Field(default=1)
     status: DocumentStatus = Field(default=DocumentStatus.ACTIVE, index=True)
     is_live: bool = Field(default=True, index=True, description="False during staged version flip ingestion")
@@ -31,5 +32,7 @@ class DocumentRead(DocumentBase):
     version: int
     status: DocumentStatus
     is_live: bool
+    is_latest: bool = False
+    has_source_file: bool = False
     uploaded_at: datetime
     updated_at: datetime

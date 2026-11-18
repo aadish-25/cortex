@@ -49,6 +49,9 @@ def index_document_chunks(
         point_id = str(uuid.uuid4())
         payload = {
             "document_id": str(document_id),
+            # Canonical aliases used by evidence lookup and reconciliation.
+            "doc_id": str(document_id),
+            "chunk_index": idx,
             "version": version,
             "department": department,
             "clearance_level": clearance_level.value,

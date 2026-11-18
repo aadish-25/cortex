@@ -103,9 +103,9 @@ async def test_admin_list_users():
             headers={"Authorization": f"Bearer {admin_token}"},
         )
         assert res.status_code == 200
-        users_list = res.json()
-        assert isinstance(users_list, list)
-        assert len(users_list) >= 7  # 7 seeded users
+        users_page = res.json()
+        assert isinstance(users_page["items"], list)
+        assert users_page["total"] >= 7  # 7 seeded users
 
 
 @pytest.mark.asyncio
@@ -130,7 +130,7 @@ async def test_admin_update_user():
             "/api/v1/users/",
             headers={"Authorization": f"Bearer {admin_token}"},
         )
-        employee = next(u for u in users_res.json() if u["username"] == "employee_fin")
+        employee = next(u for u in users_res.json()["items"] if u["username"] == "employee_fin")
         user_id = employee["id"]
 
         # 2. Update clearance and job title
@@ -167,7 +167,7 @@ async def test_admin_revoke_user_sessions():
             "/api/v1/users/",
             headers={"Authorization": f"Bearer {admin_token}"},
         )
-        target_user = next(u for u in users_res.json() if u["username"] == "manager_fin")
+        target_user = next(u for u in users_res.json()["items"] if u["username"] == "manager_fin")
         target_id = target_user["id"]
 
         # Revoke sessions
@@ -176,7 +176,7 @@ async def test_admin_revoke_user_sessions():
             headers={"Authorization": f"Bearer {admin_token}"},
         )
         assert revoke_res.status_code == 200
-        assert revoke_res.json()["token_version"] == -1
+        assert revoke_res.json()["token_version"] > 1
 
         # Reset token_version back to 1 for test hygiene
         await client.patch(

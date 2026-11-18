@@ -156,3 +156,24 @@ async def test_rewrite_query_triggers_on_pronoun_reference():
         resolved_query, was_rewritten = await rewrite_query(query=query, history=history)
         assert was_rewritten is True
         assert "Engineering travel allowance" in resolved_query
+
+
+def test_archival_memory_lookup_only_for_personal_context_prompts():
+    from backend.services.orchestration.chat_service import should_search_archival_memory
+
+    assert should_search_archival_memory("What is my leave balance?") is True
+    assert should_search_archival_memory("Can you use what you remember about me?") is True
+    assert should_search_archival_memory("What is the annual leave policy?") is False
+    assert should_search_archival_memory("Explain the security policy") is False
+
+
+def test_evidence_tokens_are_user_bound_and_opaque():
+    from backend.core.evidence_tokens import create_evidence_token, read_evidence_token
+
+    owner_id = uuid.uuid4()
+    other_id = uuid.uuid4()
+    token = create_evidence_token("qdrant-point-uuid", owner_id)
+    assert "qdrant-point-uuid" not in token
+    assert read_evidence_token(token, owner_id) == "qdrant-point-uuid"
+    with pytest.raises(ValueError):
+        read_evidence_token(token, other_id)

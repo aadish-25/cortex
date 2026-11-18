@@ -2,15 +2,20 @@ import asyncio
 from datetime import datetime, timezone
 import json
 import logging
+import re
 from typing import Any, AsyncIterator, Dict, List, Optional
 import uuid
 from pydantic import BaseModel, Field
 from qdrant_client import QdrantClient
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import select
 
 from backend.core.config import settings
+from backend.db.database import async_session
+from backend.core.evidence_tokens import create_evidence_token
 from backend.db.redis import redis_manager
 from backend.models.chat import ChatMessage, ChatRole, Conversation, Message
+from backend.models.query_quality import QueryQualityLog
 from backend.models.user import User
 from backend.services.orchestration.dag_orchestrator import orchestrate_dag_execution
 from backend.services.orchestration.episodic_memory_service import episodic_memory_service
@@ -40,6 +45,17 @@ def format_sse_frame(event: str, data: Any, event_id: Optional[str] = None) -> s
     frame += f"event: {event}\ndata: {payload}\n\n"
     return frame
 
+
+
+_PERSONAL_CONTEXT_TRIGGER = re.compile(
+    r"\b(i|me|my|mine|myself|our|we|us|remember|previously told you|based on what you know about me|for me)\b",
+    re.IGNORECASE,
+)
+
+
+def should_search_archival_memory(query: str) -> bool:
+    """Avoid Qdrant memory lookup when a prompt does not request personal context."""
+    return bool(query and _PERSONAL_CONTEXT_TRIGGER.search(query.strip()))
 
 def build_sandboxed_prompt(
     user_message: str,
@@ -169,6 +185,13 @@ class ChatService:
       - Post-turn background archival memory learning
     """
 
+    async def _session_is_current(self, session: AsyncSession, user: User, token_version: int) -> bool:
+        result = await session.execute(
+            select(User.is_active, User.token_version).where(User.id == user.id)
+        )
+        row = result.one_or_none()
+        return bool(row and row[0] and row[1] == token_version)
+
     async def stream_chat_turn(
         self,
         session: AsyncSession,
@@ -179,6 +202,9 @@ class ChatService:
         message_id: Optional[uuid.UUID] = None,
         selected_model: Optional[str] = None,
         last_event_id: Optional[str] = None,
+        append_user_message: bool = True,
+        parent_message_id: Optional[uuid.UUID] = None,
+        variant_index: int = 1,
     ) -> AsyncIterator[str]:
         """
         Executes a complete streaming chat turn, yielding SSE-formatted frames.
@@ -186,23 +212,24 @@ class ChatService:
         """
         assistant_msg_id = message_id or uuid.uuid4()
         stream_key = f"chat_stream:{assistant_msg_id}"
+        request_token_version = user.token_version
 
         # 1. Handle Reconnection Replay if client provided last_event_id
         # F9 Fix: Use the client-supplied message_id as the stream key on reconnect.
         # Previously, a new UUID was always generated here, causing Last-Event-ID replays
         # to look up the wrong Redis stream and restart generation instead of resuming.
         if last_event_id and message_id:
-            # We have both the event cursor and the original stream ID — replay from Redis
-            cached_events = await redis_manager.read_stream_events_after(
+            # Reconnect to the original stream. Never re-run the query on a cache miss:
+            # that would append a duplicate user turn and trigger a second LLM response.
+            logger.info("Following existing chat stream after event %s", last_event_id)
+            async for eid, ev_type, ev_data in redis_manager.iter_stream_events_after(
                 stream_key=stream_key,
                 last_event_id=last_event_id,
-            )
-            if cached_events:
-                logger.info("Replaying %d cached SSE events from last_event_id=%s", len(cached_events), last_event_id)
-                for eid, ev_type, ev_data in cached_events:
-                    yield format_sse_frame(ev_type, ev_data, event_id=eid)
-                return
-            # Cache miss: stream expired or ID mismatch — fall through to full generation
+            ):
+                yield format_sse_frame(ev_type, ev_data, event_id=eid)
+                if ev_type in {"done", "error", "interrupted", "session_terminated"}:
+                    return
+            return
 
         # 2. Get or create conversation session
         conversation = await memory_service.get_or_create_conversation(
@@ -211,20 +238,24 @@ class ChatService:
             conversation_id=conversation_id,
         )
 
-        # 3. Append User Message immediately to DB (Immutable history)
-        await memory_service.append_message(
-            session=session,
-            conversation_id=conversation.id,
-            sender="user",
-            content=user_message,
-        )
+        # 3. Append the user turn only for a new request. Regeneration reuses
+        # the original user message and stores a linked assistant variant.
+        if append_user_message:
+            user_message_record = await memory_service.append_message(
+                session=session,
+                conversation_id=conversation.id,
+                sender="user",
+                content=user_message,
+            )
+            parent_message_id = user_message_record.id
+            variant_index = 1
 
-        # 4. Turn 1 Auto-Titling (Non-blocking Fast LLM)
-        await memory_service.auto_title_conversation_if_needed(
-            session=session,
-            conversation=conversation,
-            first_user_prompt=user_message,
-        )
+            # 4. Turn 1 Auto-Titling (Non-blocking Fast LLM)
+            await memory_service.auto_title_conversation_if_needed(
+                session=session,
+                conversation=conversation,
+                first_user_prompt=user_message,
+            )
 
         # Emit Step 1/4: Context Normalization & Query Planning (PRD 10.2)
         eid = await redis_manager.append_stream_event(
@@ -253,12 +284,14 @@ class ChatService:
         user_profile_context = memory_service.build_user_context_block(user)
 
         # Tier 2 (Cold Archival): On-demand Qdrant semantic search (<50ms)
-        archival_memories = await episodic_memory_service.search_memories(
-            client=client,
-            user_id=user.id,
-            query=user_message,
-            limit=2,
-        )
+        archival_memories = []
+        if should_search_archival_memory(user_message):
+            archival_memories = await episodic_memory_service.search_memories(
+                client=client,
+                user_id=user.id,
+                query=user_message,
+                limit=2,
+            )
 
         # 6. Retrieve Sliding Window Context (Compacted in-memory if tokens > 8000)
         chat_history, is_near_ceiling = await memory_service.prepare_context_window(
@@ -298,6 +331,7 @@ class ChatService:
                 user=user,
                 query=user_message,
                 history=chat_history,
+                retrieval_top_k=7 if parent_message_id else 5,
             )
         except Exception as e:
             logger.error("DAG Orchestration failed: %s", e, exc_info=True)
@@ -305,6 +339,35 @@ class ChatService:
             eid = await redis_manager.append_stream_event(stream_key, "error", json.dumps(err_payload))
             yield format_sse_frame("error", err_payload, event_id=eid)
             return
+
+        # Persist de-identified quality telemetry for admin review and dashboards.
+        try:
+            from backend.services.orchestration.web_search_service import deidentify_outbound_query
+            query_preview = deidentify_outbound_query(user_message)[:600]
+            quality_log = QueryQualityLog(
+                user_id=user.id,
+                conversation_id=conversation.id,
+                query_preview=query_preview,
+                confidence=orch_res.confidence.value,
+                top_reranker_score=orch_res.top_reranker_score,
+                reranker_scores_json=json.dumps(orch_res.reranker_scores),
+                is_fallback=(UNIFORM_FALLBACK_STRING in (orch_res.final_response or "")),
+            )
+            async with async_session() as quality_session:
+                quality_session.add(quality_log)
+                await quality_session.commit()
+        except Exception:
+            logger.warning("Could not persist query quality telemetry", exc_info=True)
+
+        # Surface corpus gaps to administrators without exposing restricted evidence metadata.
+        if user.role.value == "Admin" and orch_res.confidence in {ConfidenceLevel.LOW, ConfidenceLevel.FUZZY}:
+            gap_payload = {
+                "confidence": orch_res.confidence.value,
+                "top_reranker_score": orch_res.top_reranker_score,
+                "message": "No sufficiently strong policy evidence was found for this inquiry.",
+            }
+            eid = await redis_manager.append_stream_event(stream_key, "corpus_gap", json.dumps(gap_payload))
+            yield format_sse_frame("corpus_gap", gap_payload, event_id=eid)
 
         # Emit Action Card event if HITL ActionDraft was created
         if orch_res.action_draft:
@@ -339,10 +402,22 @@ class ChatService:
         )
 
         # Emit Citations event (F4 & F8)
+        # Expose only opaque, user-bound evidence references to the browser.
+        # Raw Qdrant point UUIDs, department fields, and scoring metadata stay server-side.
+        public_evidence_chunks = [
+            {
+                "anchor": item.get("anchor"),
+                "evidence_id": create_evidence_token(str(item.get("chunk_id", "")), user.id),
+                "citation": item.get("citation", ""),
+                "section": item.get("section", ""),
+            }
+            for item in orch_res.evidence_chunks
+            if item.get("chunk_id")
+        ]
         citations_payload = {
             "citations": orch_res.citations,
             "citation_map": {str(k): v for k, v in orch_res.citation_map.items()},
-            "evidence_chunks": orch_res.evidence_chunks,
+            "evidence_chunks": public_evidence_chunks,
         }
         eid = await redis_manager.append_stream_event(
             stream_key,
@@ -399,6 +474,13 @@ class ChatService:
 
             # Stream generation
             try:
+                if not await self._session_is_current(session, user, request_token_version):
+                    eid = await redis_manager.append_stream_event(
+                        stream_key, "session_terminated", json.dumps({"reason": "session_revoked"})
+                    )
+                    yield format_sse_frame("session_terminated", {"reason": "session_revoked"}, event_id=eid)
+                    return
+                last_session_check = asyncio.get_running_loop().time()
                 target_model = selected_model or settings.GROQ_DEFAULT_MODEL
                 async for token in llm_service.generate_stream(
                     prompt=sandboxed_user_prompt,
@@ -408,6 +490,16 @@ class ChatService:
                     user_id=user.id,
                     session=session,
                 ):
+                    now = asyncio.get_running_loop().time()
+                    if now - last_session_check >= 5.0:
+                        if not await self._session_is_current(session, user, request_token_version):
+                            terminated_payload = {"reason": "session_revoked"}
+                            eid = await redis_manager.append_stream_event(
+                                stream_key, "session_terminated", json.dumps(terminated_payload)
+                            )
+                            yield format_sse_frame("session_terminated", terminated_payload, event_id=eid)
+                            return
+                        last_session_check = now
                     full_assistant_text += token
                     eid = await redis_manager.append_stream_event(
                         stream_key,
@@ -465,8 +557,19 @@ class ChatService:
             conversation_id=conversation.id,
             sender="assistant",
             content=full_assistant_text,
-            citations=orch_res.citations if orch_res.citations else None,
+            citations=(
+                {
+                    "citations": orch_res.citations,
+                    "citation_map": {str(k): v for k, v in orch_res.citation_map.items()},
+                    "evidence_chunks": public_evidence_chunks,
+                }
+                if orch_res.citations or public_evidence_chunks
+                else None
+            ),
             message_id=assistant_msg_id,
+            parent_message_id=parent_message_id,
+            variant_index=variant_index,
+            is_complete=generation_complete,
         )
 
         # 11. Emit 'done' only on complete generation; interrupted was already emitted above

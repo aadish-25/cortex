@@ -52,10 +52,10 @@ async def test_token_version_revocation(db_session: AsyncSession):
     user, _ = await authenticate_user(db_session, "manager_eng", "manager123")
 
     updated_user = await revoke_user_sessions(db_session, user.id)
-    assert updated_user.token_version == -1
+    assert updated_user.token_version > 1
 
-    # Restore version back to 1 for database consistency
-    updated_user.token_version = 1
+    # Restore to a newer version so the revoked token remains invalid
+    updated_user.token_version += 1
     db_session.add(updated_user)
     await db_session.commit()
 

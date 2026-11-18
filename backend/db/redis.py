@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 import redis.asyncio as aioredis
 
@@ -151,6 +152,101 @@ class RedisManager:
             elif item["id"] == last_event_id:
                 found_last = True
         return events
+
+    async def iter_stream_events_after(
+        self,
+        stream_key: str,
+        last_event_id: str,
+        *,
+        initial_wait_seconds: float = 4.0,
+        idle_timeout_seconds: float = 45.0,
+        block_ms: int = 1000,
+    ) -> AsyncIterator[Tuple[str, str, str]]:
+        """Replay and tail a stream until a terminal event or an idle timeout.
+
+        Unlike a one-shot XREAD, this keeps following the original generation so
+        reconnecting clients receive tokens produced after the replay begins.
+        """
+        terminal_events = {"done", "error", "interrupted", "session_terminated"}
+        client = await self.get_client()
+        started = time.monotonic()
+        last_activity = started
+        cursor = last_event_id or "0-0"
+        yielded_any = False
+
+        if client is not None:
+            while time.monotonic() - last_activity < idle_timeout_seconds:
+                try:
+                    batches = await client.xread(
+                        streams={stream_key: cursor},
+                        count=200,
+                        block=block_ms,
+                    )
+                except Exception as exc:
+                    logger.warning("Redis stream tail failed for %s (%s)", stream_key, exc)
+                    break
+                if not batches:
+                    if not yielded_any and time.monotonic() - started >= initial_wait_seconds:
+                        break
+                    continue
+                for _stream, entries in batches:
+                    for event_id, fields in entries:
+                        cursor = str(event_id)
+                        event_type = fields.get("event", "message")
+                        data = fields.get("data", "")
+                        yielded_any = True
+                        last_activity = time.monotonic()
+                        yield cursor, event_type, data
+                        if event_type in terminal_events:
+                            return
+            if not yielded_any:
+                yield "0-0", "error", json.dumps({
+                    "code": "STREAM_EXPIRED_OR_UNAVAILABLE",
+                    "retryable": False,
+                    "message": "The original response stream is no longer available. Reload the conversation to view its saved state.",
+                })
+            else:
+                yield cursor, "error", json.dumps({
+                    "code": "STREAM_IDLE",
+                    "retryable": True,
+                    "message": "The response stream stopped producing events. Reconnect using the last received event ID.",
+                })
+            return
+
+        # Process-local fallback used only while Redis is unavailable.
+        while time.monotonic() - last_activity < idle_timeout_seconds:
+            stored = _IN_MEMORY_STREAM_FALLBACK.get(stream_key, [])
+            new_items = []
+            found_cursor = cursor in ("0", "0-0", "")
+            for item in stored:
+                if found_cursor:
+                    new_items.append(item)
+                elif item["id"] == cursor:
+                    found_cursor = True
+            if new_items:
+                for item in new_items:
+                    cursor = item["id"]
+                    yielded_any = True
+                    last_activity = time.monotonic()
+                    yield cursor, item["event"], item["data"]
+                    if item["event"] in terminal_events:
+                        return
+            elif not yielded_any and time.monotonic() - started >= initial_wait_seconds:
+                break
+            await asyncio.sleep(0.25)
+        if not yielded_any:
+            yield "0-0", "error", json.dumps({
+                "code": "STREAM_EXPIRED_OR_UNAVAILABLE",
+                "retryable": False,
+                "message": "The original response stream is no longer available. Reload the conversation to view its saved state.",
+            })
+        else:
+            yield cursor, "error", json.dumps({
+                "code": "STREAM_IDLE",
+                "retryable": True,
+                "message": "The response stream stopped producing events. Reconnect using the last received event ID.",
+            })
+
 
 
 redis_manager = RedisManager()

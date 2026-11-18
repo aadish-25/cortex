@@ -125,14 +125,14 @@ class AdminAgent:
                 category=AuditCategory.ADMIN,
                 user_id=user.id,
                 status_code=403,
-                details=f"Non-admin user '{user.username}' attempted admin tool '{tool_name}'",
+                details=f"denied_tool={tool_name}",
             )
             return {
                 "status": "REFUSED",
                 "error": "Permission denied: Administrative clearance required.",
             }
 
-        logger.info("Admin '%s' executing tool '%s' with args %s", user.username, tool_name, arguments)
+        logger.info("Admin tool invoked: tool=%s", tool_name)
 
         try:
             if tool_name == "inspect_system_health":
@@ -288,15 +288,51 @@ class AdminAgent:
             logger.error("Admin tool '%s' execution failed: %s", tool_name, exc, exc_info=True)
             return {"status": "EXECUTION_ERROR", "error": str(exc)}
 
+    async def execute_from_query(
+        self,
+        session: AsyncSession,
+        user: User,
+        query: str,
+    ) -> Dict[str, Any]:
+        """Map explicit admin operational requests to the narrow tool catalog."""
+        normalized = query.strip()
+        lowered = normalized.lower()
+        if user.role != Role.ADMIN:
+            result = await self.execute_tool(session, user, "inspect_system_health", {})
+            return {"status": "ADMIN_TOOL_RESULT", "message": self.format_response("inspect_system_health", result)}
+
+        if any(term in lowered for term in ("system health", "service health", "infrastructure health", "health of", "redis status", "qdrant status", "postgres status", "database status")) or re.search(r"\b(healthy|health check)\b", lowered):
+            tool_name, arguments = "inspect_system_health", {}
+        elif "audit" in lowered:
+            category = next((c for c in ("AUTH", "DOCUMENT", "QUERY", "WORKFLOW", "ADMIN") if c.lower() in lowered), None)
+            tool_name, arguments = "inspect_audit_logs", {"limit": 20, "category": category}
+        elif any(term in lowered for term in ("reindex", "re-index", "retry ingestion")):
+            match = UUID_PATTERN.search(normalized)
+            if not match:
+                return {"status": "ADMIN_TOOL_RESULT", "message": "Provide the document ID to reindex it. You can copy it from Admin → Documents."}
+            tool_name, arguments = "trigger_reindex", {"document_id": match.group(1)}
+        elif any(term in lowered for term in ("document status", "indexing status", "status of document", "check document")):
+            match = UUID_PATTERN.search(normalized)
+            filename_match = re.search(r"[\w .()_-]+\.(?:pdf|docx|md|txt)\b", normalized, re.IGNORECASE)
+            identifier = match.group(1) if match else filename_match.group(0).strip() if filename_match else ""
+            if not identifier:
+                return {"status": "ADMIN_TOOL_RESULT", "message": "Specify a document ID or filename so I can inspect its status."}
+            tool_name, arguments = "get_document_status", {"identifier": identifier}
+        else:
+            return {"status": "ADMIN_TOOL_RESULT", "message": "I can inspect system health, audit logs, document status, or trigger document reindexing. Use the Admin workspace for user and document management."}
+
+        result = await self.execute_tool(session, user, tool_name, arguments)
+        return {"status": "ADMIN_TOOL_RESULT", "message": self.format_response(tool_name, result)}
+
     def format_response(self, tool_name: str, result: Dict[str, Any]) -> str:
         """
         Formats tool output into structured markdown for the chat interface.
         """
         if result.get("status") == "REFUSED":
-            return f"⚠️ **Administrative Access Refused:** {result.get('error')}"
+            return f"**Administrative Access Refused:** {result.get('error')}"
 
         if result.get("status") != "SUCCESS":
-            return f"❌ **Admin Tool Error:** {result.get('error', 'Execution failed')}"
+            return f"**Admin Tool Error:** {result.get('error', 'Execution failed')}"
 
         if tool_name == "inspect_system_health":
             data = result.get("data", {})
@@ -304,14 +340,13 @@ class AdminAgent:
             services = data.get("services", {})
             lines = [f"### System Health Status: **{overall}**\n"]
             for sname, sinfo in services.items():
-                icon = "🟢" if sinfo.get("status") == "UP" else "🟡" if sinfo.get("status") == "DEGRADED" else "🔴"
-                lines.append(f"- {icon} **{sname.title()}**: `{sinfo.get('status')}` ({sinfo.get('detail')})")
+                lines.append(f"- **{sname.title()}**: `{sinfo.get('status')}` ({sinfo.get('detail')})")
             return "\n".join(lines)
 
         elif tool_name == "inspect_audit_logs":
             logs = result.get("logs", [])
             if not logs:
-                return "ℹ️ No recent audit logs found matching criteria."
+                return "No recent audit logs found matching criteria."
             lines = [f"### Recent Audit Trail ({len(logs)} records)\n"]
             for l in logs[:10]:
                 lines.append(f"- `{l['created_at'][:19]}` | **{l['category']}** | `{l['event_tag']}` (HTTP {l['status_code']}): {l.get('details') or ''}")
@@ -331,11 +366,11 @@ class AdminAgent:
 
         elif tool_name == "trigger_reindex":
             r = result.get("result", {})
-            return f"✅ **Re-indexing Dispatched**: Document `{r.get('filename')}` v{r.get('version')} status is now `{r.get('status')}`."
+            return f"**Re-indexing Dispatched**: Document version `{r.get('version')}` status is now `{r.get('status')}`."
 
         elif tool_name == "replace_document_version":
             r = result.get("result", {})
-            return f"✅ **New Version Staged**: Document `{r.get('filename')}` v{r.get('version')} staged for ingestion."
+            return f"**New Version Staged**: Document version `{r.get('version')}` staged for ingestion."
 
         return str(result)
 

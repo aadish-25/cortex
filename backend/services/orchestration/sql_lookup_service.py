@@ -306,7 +306,7 @@ async def execute_sql_lookup(
     Executes typed, role-isolated parameterized queries and returns a sanitized result.
     """
     intent, params = await classify_sql_lookup_intent(query)
-    logger.info("Structured SQL Lookup: query='%s', intent=%s, params=%s", query, intent, params)
+    logger.info("Structured SQL lookup executed: intent=%s", intent)
 
     if intent == SQLLookupIntent.MY_TICKETS:
         tickets = await get_my_tickets(session, user.id)

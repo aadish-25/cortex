@@ -34,7 +34,7 @@ async def authenticate_user(
             category=AuditCategory.AUTH,
             user_id=user.id if user else None,
             status_code=401,
-            details=f"Failed login attempt for identifier: {identifier}",
+            details="Invalid credentials supplied",
         )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -83,7 +83,7 @@ async def revoke_user_sessions(
     revoked_by: Optional[uuid.UUID] = None,
 ) -> User:
     """
-    Instantly revoke all active JWT tokens for a user by setting token_version = -1 (D18).
+    Instantly revoke all active JWT tokens for a user by monotonically advancing token_version (D18).
     """
     statement = select(User).where(User.id == user_id)
     result = await session.execute(statement)
@@ -95,8 +95,8 @@ async def revoke_user_sessions(
             detail="User not found",
         )
 
-    # Set token_version to -1 per D18 specification
-    user.token_version = -1
+    # Monotonic bump invalidates all current JWTs without reusing an old version.
+    user.token_version = max(1, user.token_version) + 1
     session.add(user)
     await session.commit()
     await session.refresh(user)
@@ -107,7 +107,7 @@ async def revoke_user_sessions(
         category=AuditCategory.ADMIN,
         user_id=revoked_by or user.id,
         status_code=200,
-        details=f"Admin {revoked_by} revoked sessions for user {user.username} (token_version set to -1)",
+        details=f"target_user_id={user.id}; token_version={user.token_version}",
     )
 
     return user

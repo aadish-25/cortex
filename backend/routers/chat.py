@@ -3,10 +3,11 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 import uuid
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from qdrant_client import QdrantClient
+from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col, select
 
@@ -21,6 +22,7 @@ from backend.models.chat import (
 )
 from backend.models.enums import FeedbackCategory
 from backend.models.user import User
+from backend.models.pagination import PaginatedResponse
 from backend.services.orchestration.chat_service import chat_service
 
 logger = logging.getLogger(__name__)
@@ -42,6 +44,11 @@ class ChatMessageRequest(BaseModel):
     )
 
 
+class RegenerateRequest(BaseModel):
+    message_id: uuid.UUID = Field(..., description="New assistant message ID used for SSE replay")
+    selected_model: Optional[str] = None
+
+
 class FeedbackRequest(BaseModel):
     message_id: uuid.UUID = Field(..., description="ID of assistant message being evaluated")
     is_thumbs_up: bool = Field(..., description="True for positive feedback, False for negative")
@@ -50,6 +57,8 @@ class FeedbackRequest(BaseModel):
 
 
 class ConversationRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: uuid.UUID
     user_id: uuid.UUID
     title: str
@@ -63,8 +72,10 @@ class MessageRead(BaseModel):
     conversation_id: uuid.UUID
     sender: str
     content: str
-    citations: Optional[List[str]] = None
+    citations: Optional[Any] = None
     variant_index: int
+    parent_message_id: Optional[uuid.UUID] = None
+    is_complete: bool = True
     created_at: datetime
 
 
@@ -101,6 +112,15 @@ async def send_chat_message(
     Supports reconnection replay from Redis Stream buffer via 'Last-Event-ID'.
     """
     client = get_qdrant_client()
+    if payload.conversation_id:
+        owner_result = await db_session.execute(
+            select(Conversation).where(
+                Conversation.id == payload.conversation_id,
+                Conversation.user_id == current_user.id,
+            )
+        )
+        if owner_result.scalar_one_or_none() is None:
+            raise HTTPException(status_code=404, detail="Conversation not found")
 
     stream_generator = chat_service.stream_chat_turn(
         session=db_session,
@@ -109,7 +129,7 @@ async def send_chat_message(
         user_message=payload.message,
         conversation_id=payload.conversation_id,
         selected_model=payload.selected_model,
-        message_id=payload.message_id,  # F9: pass client-supplied message_id
+        message_id=payload.message_id,
         last_event_id=last_event_id,
     )
 
@@ -124,51 +144,64 @@ async def send_chat_message(
     )
 
 
-@router.get("/conversations", response_model=List[ConversationRead])
+@router.get("/conversations", response_model=PaginatedResponse[ConversationRead])
 async def list_user_conversations(
-    limit: int = 50,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=30, ge=1, le=100),
+    search: Optional[str] = Query(default=None, max_length=160),
     db_session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Lists all conversation sessions owned by the authenticated employee."""
+    """Lists the authenticated user's conversations using offset pagination."""
+    conditions = [Conversation.user_id == current_user.id]
+    if search:
+        conditions.append(Conversation.title.ilike(f"%{search.strip()}%"))
+    total = int((await db_session.execute(select(func.count(Conversation.id)).where(*conditions))).scalar_one() or 0)
     stmt = (
         select(Conversation)
-        .where(Conversation.user_id == current_user.id)
+        .where(*conditions)
         .order_by(col(Conversation.updated_at).desc())
-        .limit(limit)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
     )
-    res = await db_session.execute(stmt)
-    return res.scalars().all()
+    result = await db_session.execute(stmt)
+    return PaginatedResponse[ConversationRead](
+        items=[ConversationRead.model_validate(item) for item in result.scalars().all()],
+        page=page,
+        page_size=page_size,
+        total=total,
+        total_pages=(total + page_size - 1) // page_size,
+    )
 
 
-@router.get("/conversations/{conversation_id}/messages", response_model=List[MessageRead])
+@router.get("/conversations/{conversation_id}/messages", response_model=PaginatedResponse[MessageRead])
 async def get_conversation_messages(
     conversation_id: uuid.UUID,
+    page: int = Query(default=1, ge=1, description="Page 1 contains the newest messages"),
+    page_size: int = Query(default=40, ge=1, le=100),
     db_session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Retrieves all verbatim dialogue turns from the immutable PostgreSQL messages ledger.
-    Guarantees privacy: employees can only inspect conversations they own.
-    """
+    """Returns a chronological page of messages; page 1 is the newest slice."""
     conv_stmt = select(Conversation).where(
         (Conversation.id == conversation_id) & (Conversation.user_id == current_user.id)
     )
     conv_res = await db_session.execute(conv_stmt)
-    conv = conv_res.scalar_one_or_none()
-    if not conv:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Conversation not found or access denied",
-        )
+    if not conv_res.scalar_one_or_none():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found or access denied")
 
+    total = int((await db_session.execute(
+        select(func.count(Message.id)).where(Message.conversation_id == conversation_id)
+    )).scalar_one() or 0)
     stmt = (
         select(Message)
         .where(Message.conversation_id == conversation_id)
-        .order_by(col(Message.created_at).asc())
+        .order_by(col(Message.created_at).desc(), col(Message.id).desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
     )
     res = await db_session.execute(stmt)
-    messages = res.scalars().all()
+    messages = list(reversed(res.scalars().all()))
 
     results: List[MessageRead] = []
     for m in messages:
@@ -178,18 +211,109 @@ async def get_conversation_messages(
                 cites = json.loads(m.citations)
             except Exception:
                 cites = [m.citations]
-        results.append(
-            MessageRead(
-                id=m.id,
-                conversation_id=m.conversation_id,
-                sender=m.sender,
-                content=m.content,
-                citations=cites,
-                variant_index=m.variant_index,
-                created_at=m.created_at,
+        results.append(MessageRead(
+            id=m.id,
+            conversation_id=m.conversation_id,
+            sender=m.sender,
+            content=m.content,
+            citations=cites,
+            variant_index=m.variant_index,
+            parent_message_id=m.parent_message_id,
+            is_complete=m.is_complete,
+            created_at=m.created_at,
+        ))
+    return PaginatedResponse[MessageRead](
+        items=results,
+        page=page,
+        page_size=page_size,
+        total=total,
+        total_pages=(total + page_size - 1) // page_size,
+    )
+
+@router.post("/messages/{assistant_message_id}/regenerate")
+async def regenerate_assistant_message(
+    assistant_message_id: uuid.UUID,
+    payload: RegenerateRequest,
+    last_event_id: Optional[str] = Header(None, alias="Last-Event-ID"),
+    db_session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Generate another assistant variant linked to the original user turn."""
+    target_result = await db_session.execute(
+        select(Message).where(Message.id == assistant_message_id, Message.sender == "assistant")
+    )
+    target = target_result.scalar_one_or_none()
+    if target is None:
+        raise HTTPException(status_code=404, detail="Assistant message not found")
+
+    conversation_result = await db_session.execute(
+        select(Conversation).where(
+            Conversation.id == target.conversation_id,
+            Conversation.user_id == current_user.id,
+        )
+    )
+    conversation = conversation_result.scalar_one_or_none()
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Assistant message not found")
+
+    parent = None
+    if target.parent_message_id:
+        parent_result = await db_session.execute(
+            select(Message).where(
+                Message.id == target.parent_message_id,
+                Message.conversation_id == conversation.id,
+                Message.sender == "user",
             )
         )
-    return results
+        parent = parent_result.scalar_one_or_none()
+    if parent is None:
+        parent_result = await db_session.execute(
+            select(Message)
+            .where(
+                Message.conversation_id == conversation.id,
+                Message.sender == "user",
+                Message.created_at < target.created_at,
+            )
+            .order_by(col(Message.created_at).desc())
+            .limit(1)
+        )
+        parent = parent_result.scalar_one_or_none()
+    if parent is None:
+        raise HTTPException(status_code=409, detail="Original user turn could not be resolved")
+
+    # Backfill parent linkage for assistant messages created before variants were enabled.
+    target.parent_message_id = parent.id
+    target.variant_index = max(1, target.variant_index)
+    db_session.add(target)
+    await db_session.commit()
+
+    variants_result = await db_session.execute(
+        select(func.max(Message.variant_index)).where(
+            Message.conversation_id == conversation.id,
+            Message.sender == "assistant",
+            Message.parent_message_id == parent.id,
+        )
+    )
+    next_variant = int(variants_result.scalar_one() or 1) + 1
+
+    stream_generator = chat_service.stream_chat_turn(
+        session=db_session,
+        client=get_qdrant_client(),
+        user=current_user,
+        user_message=parent.content,
+        conversation_id=conversation.id,
+        message_id=payload.message_id,
+        selected_model=payload.selected_model,
+        last_event_id=last_event_id,
+        append_user_message=False,
+        parent_message_id=parent.id,
+        variant_index=next_variant,
+    )
+    return StreamingResponse(
+        stream_generator,
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/feedback", status_code=status.HTTP_201_CREATED)
@@ -210,22 +334,44 @@ async def submit_message_feedback(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Target message not found",
         )
-
-    feedback = MessageFeedback(
-        id=uuid.uuid4(),
-        message_id=payload.message_id,
-        user_id=current_user.id,
-        is_thumbs_up=payload.is_thumbs_up,
-        category=payload.category,
-        comment=payload.comment,
-        created_at=datetime.now(timezone.utc),
+    owner_stmt = select(Conversation).where(
+        Conversation.id == msg.conversation_id,
+        Conversation.user_id == current_user.id,
     )
+    owner_res = await db_session.execute(owner_stmt)
+    if msg.sender != "assistant" or owner_res.scalar_one_or_none() is None:
+        # Do not disclose whether another user's message exists.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target message not found")
+
+    existing_result = await db_session.execute(
+        select(MessageFeedback).where(
+            MessageFeedback.message_id == payload.message_id,
+            MessageFeedback.user_id == current_user.id,
+        )
+    )
+    feedback = existing_result.scalar_one_or_none()
+    updated = feedback is not None
+    if feedback is None:
+        feedback = MessageFeedback(
+            id=uuid.uuid4(),
+            message_id=payload.message_id,
+            user_id=current_user.id,
+            is_thumbs_up=payload.is_thumbs_up,
+            category=payload.category,
+            comment=payload.comment,
+            created_at=datetime.now(timezone.utc),
+        )
+    else:
+        feedback.is_thumbs_up = payload.is_thumbs_up
+        feedback.category = payload.category
+        feedback.comment = payload.comment
     db_session.add(feedback)
     await db_session.commit()
     await db_session.refresh(feedback)
     return {
         "status": "success",
         "feedback_id": str(feedback.id),
+        "updated": updated,
         "message": "Feedback recorded successfully",
     }
 
@@ -300,35 +446,34 @@ class MemoryItem(BaseModel):
     score: Optional[float] = None
 
 
-@router.get("/memories", response_model=List[MemoryItem])
+@router.get("/memories")
 async def list_user_memories(
-    limit: int = 50,
+    limit: int = Query(default=25, ge=1, le=100),
+    cursor: Optional[str] = Query(default=None),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Lists all archival memories stored for the authenticated user.
-    Memories are semantically extracted from past conversations (PRD Section 6.6).
-    """
+    """Cursor-paginated list of the authenticated user's archival memories."""
     from backend.db.qdrant import get_qdrant_client
     from backend.services.orchestration.episodic_memory_service import episodic_memory_service
 
     client = get_qdrant_client()
-    memories = await episodic_memory_service.list_memories(
-        client=client,
-        user_id=current_user.id,
-        limit=limit,
+    result = await episodic_memory_service.list_memories_page(
+        client=client, user_id=current_user.id, limit=limit, offset=cursor
     )
-    return [
-        MemoryItem(
-            memory_id=m.get("memory_id", ""),
-            text=m.get("text", ""),
-            category=m.get("category", "general"),
-            created_at=m.get("created_at"),
-            score=m.get("score"),
-        )
-        for m in memories
-    ]
-
+    return {
+        "items": [
+            MemoryItem(
+                memory_id=m.get("id", ""),
+                text=m.get("fact", ""),
+                category=m.get("category", "general"),
+                created_at=m.get("created_at"),
+            ).model_dump()
+            for m in result["items"]
+        ],
+        "total": result["total"],
+        "next_cursor": result["next_cursor"],
+        "has_more": result["next_cursor"] is not None,
+    }
 
 @router.delete("/memories/{memory_id}", status_code=status.HTTP_200_OK)
 async def delete_user_memory(
@@ -357,17 +502,13 @@ async def delete_user_memory(
 
 
 # ===========================================================================
-# F8: Evidence Drawer Context Endpoint (PRD Section 10.3)
-# Returns exact cited chunk + prev chunk + next chunk for the evidence drawer UI.
+# Evidence Drawer Context Endpoint (PRD Section 10.3)
 # ===========================================================================
 
 class EvidenceChunk(BaseModel):
-    chunk_id: str
     text: str
     citation: str
     section: str
-    doc_id: Optional[str] = None
-    chunk_index: Optional[int] = None
 
 
 class EvidenceContext(BaseModel):
@@ -376,89 +517,91 @@ class EvidenceContext(BaseModel):
     succeeding: Optional[EvidenceChunk] = None
 
 
-@router.get("/evidence/{chunk_id}", response_model=EvidenceContext)
+def _user_can_read_evidence(payload: Dict[str, Any], user: User) -> bool:
+    """Fail-closed document RBAC check for evidence reads."""
+    from backend.models.enums import CLEARANCE_RANK, ClearanceLevel, Role
+
+    if payload.get("is_live") is not True:
+        return False
+    if user.role == Role.ADMIN:
+        return True
+    raw_clearance = payload.get("clearance_level")
+    try:
+        document_clearance = ClearanceLevel(raw_clearance)
+    except (TypeError, ValueError):
+        return False
+    if document_clearance == ClearanceLevel.PUBLIC:
+        return True
+    department = payload.get("department")
+    if not department or department != user.department:
+        return False
+    return CLEARANCE_RANK.get(user.clearance_level, 0) >= CLEARANCE_RANK.get(document_clearance, 999)
+
+
+@router.get("/evidence/{evidence_id}", response_model=EvidenceContext)
 async def get_evidence_context(
-    chunk_id: str,
-    db_session: AsyncSession = Depends(get_db),
+    evidence_id: str,
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Evidence Drawer Endpoint (PRD Section 10.3):
-    Returns the exact cited chunk plus its immediately preceding and succeeding chunks
-    from the same document, applying full RBAC filtering.
-
-    The frontend uses this to render the 3-chunk evidence sandwich:
-    [dimmed preceding] [highlighted cited] [dimmed succeeding]
-    """
-    from backend.db.qdrant import get_qdrant_client
-    from backend.models.enums import CLEARANCE_RANK, Role
+    """Resolve a signed, user-bound evidence reference into a 3-chunk context sandwich."""
     from qdrant_client import models as qdrant_models
-
-    client = get_qdrant_client()
     from backend.core.config import settings as cfg
+    from backend.core.evidence_tokens import read_evidence_token
+    from backend.db.qdrant import get_qdrant_client
 
     try:
-        # Fetch the target chunk by its Qdrant point UUID
-        target_points = client.retrieve(
+        point_id = read_evidence_token(evidence_id, current_user.id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Evidence not found")
+
+    client = get_qdrant_client()
+    try:
+        points = client.retrieve(
             collection_name=cfg.QDRANT_COLLECTION,
-            ids=[chunk_id],
+            ids=[point_id],
             with_payload=True,
             with_vectors=False,
         )
-    except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Chunk not found: {exc}") from exc
+    except Exception:
+        logger.exception("Evidence retrieval failed")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Evidence is temporarily unavailable")
 
-    if not target_points:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chunk not found.")
-
-    target_point = target_points[0]
+    if not points:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Evidence not found")
+    target_point = points[0]
     payload = target_point.payload or {}
+    if not _user_can_read_evidence(payload, current_user):
+        # Same response for missing and unauthorized evidence prevents existence probing.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Evidence not found")
 
-    # RBAC check: user must have access to this document's department + clearance
-    doc_department = payload.get("department", "")
-    doc_clearance = payload.get("clearance_level", "Public")
-
-    if current_user.role.value != "Admin":
-        if doc_department and current_user.department != doc_department:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied: department mismatch.")
-        from backend.models.enums import ClearanceLevel
-        try:
-            doc_clr_level = ClearanceLevel(doc_clearance)
-            if CLEARANCE_RANK.get(current_user.clearance_level, 0) < CLEARANCE_RANK.get(doc_clr_level, 0):
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied: insufficient clearance.")
-        except ValueError:
-            pass  # Unknown clearance level — allow through
-
-    target_chunk = EvidenceChunk(
-        chunk_id=str(target_point.id),
+    target = EvidenceChunk(
         text=payload.get("text", ""),
         citation=payload.get("citation", ""),
         section=payload.get("section", ""),
-        doc_id=payload.get("doc_id"),
-        chunk_index=payload.get("chunk_index"),
     )
+    preceding = None
+    succeeding = None
+    document_id = payload.get("document_id") or payload.get("doc_id")
+    chunk_index = payload.get("chunk_index")
 
-    # Fetch adjacent chunks from the same doc_id by chunk_index ± 1
-    preceding: Optional[EvidenceChunk] = None
-    succeeding: Optional[EvidenceChunk] = None
-    target_doc_id = payload.get("doc_id")
-    target_index = payload.get("chunk_index")
-
-    if target_doc_id is not None and target_index is not None:
-        for offset, attr in [(-1, "preceding"), (+1, "succeeding")]:
-            neighbour_index = target_index + offset
+    if document_id is not None and isinstance(chunk_index, int):
+        for offset, direction in ((-1, "preceding"), (1, "succeeding")):
             try:
                 scroll_res = client.scroll(
                     collection_name=cfg.QDRANT_COLLECTION,
                     scroll_filter=qdrant_models.Filter(
                         must=[
                             qdrant_models.FieldCondition(
-                                key="doc_id",
-                                match=qdrant_models.MatchValue(value=str(target_doc_id)),
+                                key="document_id",
+                                match=qdrant_models.MatchValue(value=str(document_id)),
                             ),
                             qdrant_models.FieldCondition(
                                 key="chunk_index",
-                                match=qdrant_models.MatchValue(value=neighbour_index),
+                                match=qdrant_models.MatchValue(value=chunk_index + offset),
+                            ),
+                            qdrant_models.FieldCondition(
+                                key="is_live",
+                                match=qdrant_models.MatchValue(value=True),
                             ),
                         ]
                     ),
@@ -466,27 +609,22 @@ async def get_evidence_context(
                     with_payload=True,
                     with_vectors=False,
                 )
-                neighbour_points = scroll_res[0] if scroll_res else []
-                if neighbour_points:
-                    np = neighbour_points[0]
-                    np_payload = np.payload or {}
-                    neighbour_chunk = EvidenceChunk(
-                        chunk_id=str(np.id),
-                        text=np_payload.get("text", ""),
-                        citation=np_payload.get("citation", ""),
-                        section=np_payload.get("section", ""),
-                        doc_id=np_payload.get("doc_id"),
-                        chunk_index=np_payload.get("chunk_index"),
-                    )
-                    if attr == "preceding":
-                        preceding = neighbour_chunk
-                    else:
-                        succeeding = neighbour_chunk
+                neighbours = scroll_res[0] if scroll_res else []
+                if not neighbours:
+                    continue
+                neighbour_payload = neighbours[0].payload or {}
+                if not _user_can_read_evidence(neighbour_payload, current_user):
+                    continue
+                chunk = EvidenceChunk(
+                    text=neighbour_payload.get("text", ""),
+                    citation=neighbour_payload.get("citation", ""),
+                    section=neighbour_payload.get("section", ""),
+                )
+                if direction == "preceding":
+                    preceding = chunk
+                else:
+                    succeeding = chunk
             except Exception:
-                pass  # Adjacent chunk lookup failure is non-fatal
+                logger.warning("Adjacent evidence lookup failed", exc_info=True)
 
-    return EvidenceContext(
-        target=target_chunk,
-        preceding=preceding,
-        succeeding=succeeding,
-    )
+    return EvidenceContext(target=target, preceding=preceding, succeeding=succeeding)

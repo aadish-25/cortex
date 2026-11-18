@@ -1,14 +1,16 @@
 from datetime import datetime, timezone
 from typing import List, Optional
 import uuid
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import col, select
+from sqlalchemy import func
+from sqlmodel import col, or_, select
 
 from backend.core.security import hash_password, require_user_manager
 from backend.db.database import get_db
-from backend.models.enums import AuditCategory
+from backend.models.enums import AuditCategory, Role
 from backend.models.user import User, UserCreate, UserRead, UserUpdate
+from backend.models.pagination import PaginatedResponse
 from backend.services.auth.audit_service import log_audit_event
 from backend.services.auth.auth_service import revoke_user_sessions
 
@@ -63,25 +65,54 @@ async def create_user(
         category=AuditCategory.ADMIN,
         user_id=admin_user.id,
         status_code=201,
-        details=f"Admin created user: {new_user.username} ({new_user.role.value}/{new_user.department})",
+        details=f"target_user_id={new_user.id}; role={new_user.role.value}; department={new_user.department}",
     )
 
     return UserRead.model_validate(new_user)
 
 
-@router.get("/", response_model=List[UserRead])
+@router.get("/", response_model=PaginatedResponse[UserRead])
 async def list_users(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=100),
+    search: Optional[str] = Query(default=None, max_length=120),
+    department: Optional[str] = None,
+    role: Optional[str] = None,
+    is_active: Optional[bool] = None,
     admin_user: User = Depends(require_user_manager),
     session: AsyncSession = Depends(get_db),
 ):
-    """
-    List all users in the organization for the Admin Management Dashboard.
-    """
-    stmt = select(User).order_by(col(User.created_at).desc())
-    res = await session.execute(stmt)
-    users = res.scalars().all()
-    return [UserRead.model_validate(u) for u in users]
+    """Paginated organization user directory for administrators."""
+    conditions = []
+    if search:
+        term = f"%{search.strip()}%"
+        conditions.append(or_(User.name.ilike(term), User.username.ilike(term), User.email.ilike(term)))
+    if department:
+        conditions.append(User.department == department)
+    if role:
+        try:
+            conditions.append(User.role == Role(role))
+        except ValueError:
+            raise HTTPException(status_code=422, detail="Invalid role filter")
+    if is_active is not None:
+        conditions.append(User.is_active == is_active)
 
+    count_stmt = select(func.count(User.id))
+    data_stmt = select(User)
+    if conditions:
+        count_stmt = count_stmt.where(*conditions)
+        data_stmt = data_stmt.where(*conditions)
+    total = int((await session.execute(count_stmt)).scalar_one() or 0)
+    data_stmt = data_stmt.order_by(col(User.created_at).desc()).offset((page - 1) * page_size).limit(page_size)
+    result = await session.execute(data_stmt)
+    users = result.scalars().all()
+    return PaginatedResponse[UserRead](
+        items=[UserRead.model_validate(u) for u in users],
+        page=page,
+        page_size=page_size,
+        total=total,
+        total_pages=(total + page_size - 1) // page_size,
+    )
 
 @router.get("/{user_id}", response_model=UserRead)
 async def get_user_by_id(
@@ -150,10 +181,11 @@ async def update_user(
         user.clearance_level = payload.clearance_level
 
     # If deactivating user, invalidate active sessions immediately (FRONTEND_SPECS)
-    if payload.is_active is not None:
+    if payload.is_active is not None and payload.is_active != user.is_active:
+        # Monotonically advance the version on both deactivate and reactivate.
+        # Reusing version 1 after a -1 sentinel would revive old JWTs.
+        user.token_version = max(1, user.token_version) + 1
         user.is_active = payload.is_active
-        if not payload.is_active:
-            user.token_version = -1
 
     user.updated_at = datetime.now(timezone.utc)
     session.add(user)
@@ -166,7 +198,7 @@ async def update_user(
         category=AuditCategory.ADMIN,
         user_id=admin_user.id,
         status_code=200,
-        details=f"Admin updated user {user.username} (active={user.is_active})",
+        details=f"target_user_id={user.id}; active={user.is_active}; role={user.role.value}; department={user.department}",
     )
 
     return UserRead.model_validate(user)
@@ -179,7 +211,7 @@ async def revoke_sessions(
     session: AsyncSession = Depends(get_db),
 ):
     """
-    Instant session termination for a user (D18). Sets token_version to -1.
+    Instant session termination for a user (D18). Advances token_version to invalidate existing JWTs.
     """
     updated_user = await revoke_user_sessions(
         session=session,

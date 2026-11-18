@@ -54,7 +54,7 @@ class LLMQueryRewrite(BaseModel):
 class LLMPlanTask(BaseModel):
     id: int = Field(description="Sequential task integer ID, e.g. 1, 2, 3")
     type: PlanTaskType = Field(
-        description="Task intent type: INTERNAL_RAG for company knowledge, EXTERNAL_WEB for internet search, STRUCTURED_LOOKUP for SQL DB queries, ACTION_WORKFLOW for drafting/submitting Jira tickets, GITHUB_SEARCH for code/PR/issue search, DRIVE_SEARCH for Google Drive/Docs search, DIRECT_CHAT for greetings/chit-chat"
+        description="Task intent type: INTERNAL_RAG for company knowledge, EXTERNAL_WEB for internet search, STRUCTURED_LOOKUP for SQL DB queries, ACTION_WORKFLOW for Jira workflows, GITHUB_SEARCH for code/PR/issue search, DRIVE_SEARCH for Google Drive/Docs search, ADMIN_OPERATION for explicitly requested Admin-only operational tools, DIRECT_CHAT for greetings/chit-chat"
     )
     query: str = Field(description="Focused query, action instruction, or message for this specific task")
     depends_on: List[int] = Field(default_factory=list, description="IDs of prerequisite tasks that must complete first")
@@ -262,6 +262,7 @@ async def plan_and_decompose_query(
     query: str,
     history: Optional[List[ChatMessage]] = None,
     summary: Optional[str] = None,
+    user_role: Optional[str] = None,
 ) -> ExecutionPlan:
     """
     Master Query Planner (Phase 3.1 & Decision D24):
@@ -273,6 +274,21 @@ async def plan_and_decompose_query(
 
     # Step 1: Turn-based query rewrite
     active_query, was_rewritten = await rewrite_query(query, history, summary=summary)
+
+    # Admin operational intents are isolated from ordinary employee RAG requests.
+    if user_role == "Admin":
+        admin_intent = re.search(
+            r"\b(system health|service health|infrastructure health|health of|audit logs?|audit trail|reindex|re-index|retry ingestion|document status|indexing status|redis status|qdrant status|postgres status|status of (?:redis|qdrant|postgres|database|system))\b",
+            active_query,
+            re.IGNORECASE,
+        )
+        if admin_intent:
+            return ExecutionPlan(
+                tasks=[PlanTask(id=1, type=PlanTaskType.ADMIN_OPERATION, query=active_query, depends_on=[])],
+                original_query=query,
+                rewritten_query=active_query if was_rewritten else None,
+                was_rewritten=was_rewritten,
+            )
 
     # Step 2: Multi-Query Decomposition with LiteLLM Abstraction Layer
     if llm_service.is_configured():
@@ -287,7 +303,9 @@ async def plan_and_decompose_query(
             "- ACTION_WORKFLOW: Drafting or submitting Jira service tickets, equipment orders, leave requests.\n"
             "- GITHUB_SEARCH: Search code repositories, view pull requests, issues, or inspect code files in GitHub. ONLY assign if the user explicitly mentions GitHub, repo, PRs, issues, commits, or codebase.\n"
             "- DRIVE_SEARCH: Search company Google Shared Drive, Google Docs, or fetch shared file contents. ONLY assign if the user explicitly mentions Google Drive, Drive, shared folder, or gdoc.\n"
+            "- ADMIN_OPERATION: Inspect system health, audit logs, document status, or explicitly trigger reindex. Only use for authenticated Admin users and explicit operational requests.\n"
             "- DIRECT_CHAT: Greetings, conversational pleasantries ('What's up', 'kya chal raha hai', 'who are you'), or general banter.\n\n"
+            f"Authenticated role: {user_role or 'Unknown'}. Do not assign ADMIN_OPERATION unless role is exactly Admin.\n"
             "Rules:\n"
             "- Decompose compound prompts into discrete, standalone sub-tasks.\n"
             "- Default knowledge retrieval ALWAYS routes to INTERNAL_RAG unless the user explicitly requests Drive or GitHub.\n"

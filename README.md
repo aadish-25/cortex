@@ -53,3 +53,52 @@ Verify live connectivity to GitHub, Google Drive, and Redis:
 ```cmd
 python scripts/ping_integrations.py
 ```
+
+---
+
+## Redesigned workspace — local setup
+
+The current frontend is a modular React/Vite application. The left navigation is a fixed-height workspace rail; its conversation list scrolls independently, while the account/profile control remains anchored at the bottom. Chat, profile, and each administration section have separate routes.
+
+### Start the full stack
+
+```powershell
+python run.py
+```
+
+`run.py` now:
+1. Creates `.env` from `.env.example` when `.env` is missing.
+2. Runs `uv sync --frozen` when `uv` is installed (otherwise it uses the active Python environment and installs the project if dependencies are missing).
+3. Installs frontend packages on first run when `frontend/node_modules` is missing.
+4. Starts PostgreSQL, Redis, and Qdrant through Docker Compose.
+5. Starts FastAPI, a Celery worker, Celery Beat, and Vite. Ctrl+C stops these application processes; Docker data containers remain running so local data is preserved.
+
+Open `http://localhost:5173`. The API is at `http://localhost:8000` and Swagger is at `http://localhost:8000/docs`.
+
+### Prerequisites
+
+- Docker Desktop with Compose support.
+- Python 3.14 (recommended through `uv`, which reads `.python-version` and `uv.lock`).
+- Node.js 18+ and npm.
+
+### First-time configuration
+
+- Review `.env` after the first launch. Add at least one LLM provider API key to enable chat generation.
+- `JWT_SECRET_KEY` must be replaced with a random secret of at least 32 characters before any shared or production deployment.
+- The bundled Compose defaults are for local development. For production, supply unique database credentials, secure Redis/Qdrant behind private networking/authentication, terminate TLS at a trusted reverse proxy, and persist/backup `storage/documents/` and database volumes.
+- `FRONTEND_ORIGINS` must contain the actual frontend origin(s) when deploying outside localhost.
+- `CORTEX_BOOTSTRAP_ADMIN_PASSWORD` is optional in development. If unset and no admin account exists, `python scripts/seed_users.py` generates and prints a one-time random admin password. In production, set this variable before seeding. Demo employee/manager accounts are only seeded outside production.
+- Uploaded originals are retained under `storage/documents/` for later reindexing. Keep this directory on persistent storage and include it in backups. It is intentionally excluded from source control.
+
+### Frontend routes
+
+- `/login`, `/register`
+- `/chat`, `/chat/:conversationId`
+- `/profile`
+- `/admin/overview`
+- `/admin/documents`
+- `/admin/users`
+- `/admin/quality`
+- `/admin/audit`
+
+See `docs/FRONTEND_REDESIGN.md` for the frontend structure and `docs/BACKEND_CHANGELOG_REDESIGN.md` for the complete backend change inventory.

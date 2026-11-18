@@ -90,3 +90,9 @@ On `event: error` with `retryable: true` → show retry button, resend with `ret
 - SSE: native `EventSource` API, reconnects automatically using `Last-Event-ID`
 
 ---
+
+---
+
+## 2026-11 redesigned frontend
+
+The original screen/layout specification above is superseded by the implemented redesign described in [`FRONTEND_REDESIGN.md`](./FRONTEND_REDESIGN.md). The new route structure, fixed sidebar/independent scroll regions, modular component map, citation drawer, SSE client, and pagination behaviour are documented there. Backend changes made to support this redesign are inventoried in [`BACKEND_CHANGELOG_REDESIGN.md`](./BACKEND_CHANGELOG_REDESIGN.md).

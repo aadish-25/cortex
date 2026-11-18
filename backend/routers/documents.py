@@ -1,21 +1,28 @@
 from typing import List, Optional
+from pathlib import Path
 import uuid
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import func
+from sqlmodel import select
 
 from backend.core.security import get_current_user, require_document_manager
 from backend.db.database import get_db
 from backend.db.qdrant import get_qdrant_client
 from backend.models.document import DocumentRead
-from backend.models.enums import ClearanceLevel, Role
+from backend.models.enums import ClearanceLevel, DocumentStatus, Role
+from backend.models.pagination import PaginatedResponse
 from backend.models.user import User
 from backend.services.ingestion.chunking_service import chunk_sections
 from backend.services.ingestion.document_service import (
     delete_document,
     finalize_document_activation,
+    persist_document_file,
+    record_document_processing_log,
     get_document_by_id,
     list_documents_for_user,
+    list_documents_for_user_page,
     mark_document_failed,
     register_document_upload,
 )
@@ -28,6 +35,7 @@ from backend.services.vector.vector_service import (
 router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
 
 SUPPORTED_EXTENSIONS = {".md", ".docx", ".pdf", ".txt"}
+MAX_DOCUMENT_BYTES = 25 * 1024 * 1024
 
 
 class DocumentUploadResponse(BaseModel):
@@ -76,12 +84,14 @@ async def upload_document(
             detail=f"Unsupported file format '{ext}'. Supported formats: {sorted(SUPPORTED_EXTENSIONS)}",
         )
 
-    content = await file.read()
+    content = await file.read(MAX_DOCUMENT_BYTES + 1)
     if not content:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Uploaded file is empty",
         )
+    if len(content) > MAX_DOCUMENT_BYTES:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Document exceeds the 25 MB upload limit")
 
     doc_title = title or filename.rsplit(".", 1)[0].replace("_", " ")
 
@@ -94,6 +104,10 @@ async def upload_document(
         clearance_level=clearance_level,
         title=doc_title,
     )
+    new_doc.storage_path = persist_document_file(new_doc.id, filename, content)
+    session.add(new_doc)
+    await session.commit()
+    await record_document_processing_log(session, new_doc.id, "upload", "STARTED", "Source file stored; ingestion started.")
 
     try:
         # 2. Parse file sections
@@ -127,35 +141,57 @@ async def upload_document(
         )
 
         # 6. Finalize in SQL database: Mark active and commit
-        activated_doc = await finalize_document_activation(session, new_doc.id)
+        activated_doc = await finalize_document_activation(session, new_doc.id, qdrant_client=qdrant_client)
 
         return DocumentUploadResponse(
-            document=DocumentRead.model_validate(activated_doc),
+            document=DocumentRead.model_validate(activated_doc).model_copy(update={"is_latest": True, "has_source_file": bool(activated_doc.storage_path and Path(activated_doc.storage_path).is_file())}),
             chunks_indexed=points_indexed,
             is_new_version=is_new_version,
         )
 
     except Exception as exc:
         # Decision D4: Record failure and prevent partial search pollution
-        await mark_document_failed(session, new_doc.id, str(exc))
+        await mark_document_failed(session, new_doc.id, exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Document ingestion failed: {exc}",
         )
 
 
-@router.get("/", response_model=List[DocumentRead])
+@router.get("/", response_model=PaginatedResponse[DocumentRead])
 async def list_documents(
     department: Optional[str] = None,
+    search: Optional[str] = Query(default=None, max_length=160),
+    status_filter: Optional[DocumentStatus] = Query(default=None, alias="status"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=100),
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ):
-    """
-    List all documents visible to the authenticated user under 3D RBAC rules.
-    """
-    docs = await list_documents_for_user(session=session, user=current_user, department=department)
-    return [DocumentRead.model_validate(d) for d in docs]
-
+    """Paginated document directory with role-aware visibility."""
+    docs, total = await list_documents_for_user_page(
+        session=session,
+        user=current_user,
+        department=department,
+        search=search,
+        status_filter=status_filter,
+        page=page,
+        page_size=page_size,
+    )
+    latest_result = await session.execute(
+        select(Document.filename, Document.department, func.max(Document.version)).group_by(Document.filename, Document.department)
+    )
+    latest_versions = {(filename, department): version for filename, department, version in latest_result.all()}
+    return PaginatedResponse[DocumentRead](
+        items=[DocumentRead.model_validate(d).model_copy(update={
+            "is_latest": latest_versions.get((d.filename, d.department)) == d.version,
+            "has_source_file": bool(d.storage_path and Path(d.storage_path).is_file()),
+        }) for d in docs],
+        page=page,
+        page_size=page_size,
+        total=total,
+        total_pages=(total + page_size - 1) // page_size,
+    )
 
 @router.get("/{doc_id}", response_model=DocumentRead)
 async def get_document(
@@ -167,7 +203,13 @@ async def get_document(
     Retrieve single document details with 3D RBAC clearance check.
     """
     doc = await get_document_by_id(session=session, doc_id=doc_id, user=current_user)
-    return DocumentRead.model_validate(doc)
+    latest_result = await session.execute(
+        select(func.max(Document.version)).where(Document.filename == doc.filename, Document.department == doc.department)
+    )
+    return DocumentRead.model_validate(doc).model_copy(update={
+        "is_latest": latest_result.scalar_one() == doc.version,
+        "has_source_file": bool(doc.storage_path and Path(doc.storage_path).is_file()),
+    })
 
 
 @router.delete("/{doc_id}", response_model=DeleteDocumentResponse)
