@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { ArrowRight, Mail, UserRound } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api, ApiError } from '../api/client'
+import CortexLogo from '../components/CortexLogo'
 
 export function RegisterPage() {
   const navigate = useNavigate()
@@ -31,13 +32,13 @@ export function RegisterPage() {
   return (
     <main className="auth-page register-page">
       <section className="auth-brand-panel">
-        <div className="auth-brand"><span className="brand-mark">c</span><span>cortex</span></div>
+        <div className="auth-brand"><CortexLogo size={32} /><span>cortex</span></div>
         <div className="auth-brand-copy"><p className="eyebrow">CONTROLLED ACCESS</p><h1>A considered way<br /><span>into company knowledge.</span></h1><p>New accounts are provisioned by an administrator with your corporate email, department, and clearance level.</p></div>
         <div className="auth-brand-footer"><span>ACCESS REQUESTS</span><span>© 2026 Cortex</span></div>
       </section>
       <section className="auth-form-panel">
         <div className="auth-form-wrap">
-          <div className="mobile-auth-brand"><span className="brand-mark">c</span><span>cortex</span></div>
+          <div className="mobile-auth-brand"><CortexLogo size={28} /><span>cortex</span></div>
           {submitted ? (
             <div className="registration-success">
               <div className="success-mark">✓</div>

@@ -4,6 +4,7 @@ import { Activity, ChevronDown, FileText, LayoutDashboard, MessageSquare, Plus, 
 import { api } from '../api/client'
 import type { Conversation, Page } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
+import CortexLogo from '../components/CortexLogo'
 import { UserMenu } from './UserMenu'
 
 export function Sidebar({ mobileOpen, onNavigate }: { mobileOpen: boolean; onNavigate: () => void }) {
@@ -55,7 +56,7 @@ export function Sidebar({ mobileOpen, onNavigate }: { mobileOpen: boolean; onNav
 
   return <aside className={`sidebar ${mobileOpen ? 'sidebar-open' : ''}`}>
     <div className="sidebar-brand-row">
-      <NavLink to="/chat" className="brand-lockup" onClick={onNavigate}><span className="brand-mark">c</span><span>cortex</span></NavLink>
+      <NavLink to="/chat" className="brand-lockup" onClick={onNavigate}><CortexLogo size={27} /><span>cortex</span></NavLink>
       <span className="workspace-tag">WORKSPACE</span>
     </div>
 
