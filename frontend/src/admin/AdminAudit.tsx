@@ -13,7 +13,7 @@ export function AdminAudit() {
   const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const pageSize = 50
+  const pageSize = 25
   async function load(nextPage = 1, selectedCategory = category) {
     setLoading(true); setError('')
     const params = new URLSearchParams({ limit: String(pageSize), offset: String((nextPage - 1) * pageSize) })

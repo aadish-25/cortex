@@ -75,6 +75,6 @@ export interface DocumentRecord {
 export interface AdminHealth {
   overall: string
   timestamp: string
-  services: Record<string, { status: string; detail: string }>
+  services: Record<string, { status: string; detail: string; optional?: boolean }>
   llm_providers?: Record<string, string>
 }

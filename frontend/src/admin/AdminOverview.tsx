@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Activity, ArrowUpRight, Database, Gauge, MessageSquareText, ShieldCheck, ThumbsUp, Zap } from 'lucide-react'
 import { api } from '../api/client'
@@ -9,48 +9,71 @@ interface QueryStats { total_queries: number; daily_counts: Array<{ day: string;
 interface Feedback { thumbs_up: number; thumbs_down: number; total_feedback: number; satisfaction_percent: number | null }
 interface Tokens { grand_total_tokens: number; grand_total_cost_usd: number; by_provider_model: Array<{ provider: string; model: string; total_tokens: number; request_count: number }> }
 
+// True stale-while-revalidate module cache: renders instantly on every revisit while refreshing live data in the background.
+const _cache: { health?: AdminHealth; quality?: Quality; queries?: QueryStats; feedback?: Feedback; tokens?: Tokens; loaded?: boolean } = {}
+
 export function AdminOverview() {
-  const [health, setHealth] = useState<AdminHealth | null>(null)
-  const [quality, setQuality] = useState<Quality | null>(null)
-  const [queries, setQueries] = useState<QueryStats | null>(null)
-  const [feedback, setFeedback] = useState<Feedback | null>(null)
-  const [tokens, setTokens] = useState<Tokens | null>(null)
+  const [health, setHealth] = useState<AdminHealth | null>(_cache.health ?? null)
+  const [quality, setQuality] = useState<Quality | null>(_cache.quality ?? null)
+  const [queries, setQueries] = useState<QueryStats | null>(_cache.queries ?? null)
+  const [feedback, setFeedback] = useState<Feedback | null>(_cache.feedback ?? null)
+  const [tokens, setTokens] = useState<Tokens | null>(_cache.tokens ?? null)
   const [error, setError] = useState('')
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(!_cache.loaded)
+  const mountedRef = useRef(true)
+
+  const refreshAll = useCallback(async () => {
+    let failures = 0
+    const handle = <T,>(promise: Promise<T>, apply: (val: T) => void) =>
+      promise
+        .then((val) => { if (mountedRef.current) apply(val) })
+        .catch(() => { failures += 1 })
+
+    await Promise.all([
+      handle(api<AdminHealth>('/api/v1/admin/health'), (v) => { _cache.health = v; setHealth(v) }),
+      handle(api<Quality>('/api/v1/admin/analytics/quality?days=7'), (v) => { _cache.quality = v; setQuality(v) }),
+      handle(api<QueryStats>('/api/v1/admin/analytics/queries?days=7'), (v) => { _cache.queries = v; setQueries(v) }),
+      handle(api<Feedback>('/api/v1/admin/analytics/feedback?days=7'), (v) => { _cache.feedback = v; setFeedback(v) }),
+      handle(api<Tokens>('/api/v1/admin/analytics/tokens?days=7'), (v) => { _cache.tokens = v; setTokens(v) }),
+    ])
+
+    if (!mountedRef.current) return
+    _cache.loaded = true
+    setLoading(false)
+    if (failures === 5) setError('Could not load admin telemetry. Check that the backend services are running.')
+    else setError('')
+  }, [])
 
   useEffect(() => {
-    Promise.allSettled([
-      api<AdminHealth>('/api/v1/admin/health'),
-      api<Quality>('/api/v1/admin/analytics/quality?days=7'),
-      api<QueryStats>('/api/v1/admin/analytics/queries?days=7'),
-      api<Feedback>('/api/v1/admin/analytics/feedback?days=7'),
-      api<Tokens>('/api/v1/admin/analytics/tokens?days=7'),
-    ]).then((results) => {
-      if (results[0].status === 'fulfilled') setHealth(results[0].value)
-      if (results[1].status === 'fulfilled') setQuality(results[1].value)
-      if (results[2].status === 'fulfilled') setQueries(results[2].value)
-      if (results[3].status === 'fulfilled') setFeedback(results[3].value)
-      if (results[4].status === 'fulfilled') setTokens(results[4].value)
-      if (results.every((item) => item.status === 'rejected')) setError('Could not load admin telemetry. Check that the backend services are running.')
-    }).finally(() => setLoading(false))
-  }, [])
+    mountedRef.current = true
+    void refreshAll()
+    const timer = setInterval(() => { void refreshAll() }, 30_000)
+    return () => { mountedRef.current = false; clearInterval(timer) }
+  }, [refreshAll])
 
   const metrics = [
     { label: 'Queries · 7 days', value: quality?.total_queries ?? queries?.total_queries ?? '—', note: 'Recorded chat turns', icon: MessageSquareText },
-    { label: 'Average reranker score', value: quality?.average_reranker_score?.toFixed(3) ?? '—', note: 'Top retrieved evidence score', icon: Gauge },
+    { label: 'Average reranker score', value: quality?.average_reranker_score != null ? quality.average_reranker_score.toFixed(3) : '—', note: 'Top retrieved evidence score', icon: Gauge },
     { label: 'Fallback rate', value: quality ? `${quality.fallback_rate_percent}%` : '—', note: `${quality?.fallback_queries ?? 0} fallback answers`, icon: Activity },
     { label: 'Answer satisfaction', value: feedback?.satisfaction_percent == null ? '—' : `${feedback.satisfaction_percent}%`, note: `${feedback?.total_feedback ?? 0} ratings submitted`, icon: ThumbsUp },
   ]
   const maxCount = Math.max(1, ...(queries?.daily_counts || []).map((item) => item.query_count))
   const serviceEntries = Object.entries(health?.services ?? {}) as Array<[string, AdminHealth['services'][string]]>
 
+  function serviceBadgeClass(svc: AdminHealth['services'][string]) {
+    const s = svc.status.toLowerCase()
+    if (s === 'up') return 'up'
+    if (s === 'down') return 'down'
+    return 'degraded'
+  }
+
   return <div className="admin-page">
     <header className="page-header overview-header"><div><p className="eyebrow">CONTROL ROOM</p><h1>Good afternoon, Admin.</h1><p className="page-subtitle">A clear view of Cortex operations, retrieval quality and usage.</p></div><div className="header-status"><span className={`health-dot ${health?.overall === 'UP' ? 'up' : 'warn'}`} />{health?.overall || 'Checking'}<small>System status</small></div></header>
     {error && <div className="inline-error">{error}</div>}
-    <section className="metric-grid">{metrics.map((metric) => { const Icon = metric.icon; return <article className="metric-card" key={metric.label}><div className="metric-card-top"><span>{metric.label}</span><Icon size={17} /></div><strong>{loading ? '—' : metric.value}</strong><small>{metric.note}</small></article> })}</section>
+    <section className="metric-grid">{metrics.map((metric) => { const Icon = metric.icon; return <article className="metric-card" key={metric.label}><div className="metric-card-top"><span>{metric.label}</span><Icon size={17} /></div><strong>{loading && metric.value === '—' ? '—' : metric.value}</strong><small>{metric.note}</small></article> })}</section>
     <div className="overview-grid">
       <section className="panel health-panel"><div className="panel-heading"><div><p className="eyebrow">INFRASTRUCTURE</p><h2>Service health</h2></div><span className="live-label"><span /> Live checks</span></div>
-        <div className="service-list">{serviceEntries.map(([name, service]) => <div className="service-row" key={name}><div className="service-name"><span className={`service-status ${service.status.toLowerCase()}`} /><strong>{name.toUpperCase()}</strong></div><span className={`service-badge ${service.status.toLowerCase()}`}>{service.status}</span><small>{service.detail}</small></div>)}{!health && <div className="table-loading">{loading ? 'Checking services…' : 'Health data unavailable'}</div>}</div>
+        <div className="service-list">{serviceEntries.map(([name, service]) => <div className="service-row" key={name}><div className="service-name"><span className={`service-status ${serviceBadgeClass(service)}`} /><strong>{name.toUpperCase()}</strong></div><span className={`service-badge ${serviceBadgeClass(service)}`}>{service.status}</span><small>{service.detail}</small></div>)}{!health && <div className="table-loading">{loading ? 'Checking services…' : 'Health data unavailable'}</div>}</div>
         {health?.llm_providers && <div className="provider-health"><p className="eyebrow">MODEL PROVIDER KEYS</p><div>{Object.entries(health.llm_providers).map(([provider, status]) => <span key={provider} className={status === 'CONFIGURED' ? 'provider-configured' : 'provider-missing'}>{provider} · {status === 'CONFIGURED' ? 'Configured' : 'Not configured'}</span>)}</div></div>}
       </section>
       <section className="panel query-panel"><div className="panel-heading"><div><p className="eyebrow">ACTIVITY</p><h2>Query volume</h2></div><span className="panel-period">Last 7 days</span></div>

@@ -1,57 +1,113 @@
 import { useEffect, useState } from 'react'
-import { ArrowLeft, Brain, Trash2 } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { ArrowLeft, ArrowUpRight, Brain, CheckCircle2, Lock, MessageSquare, Moon, ShieldCheck, Sun } from 'lucide-react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { api } from '../api/client'
+import type { Conversation, Page } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
 import { useTheme } from '../components/ThemeToggle'
 
-interface Memory { memory_id: string; text: string; category: string; created_at?: string | null }
+const CLEARANCE_ORDER = ['Public', 'Internal', 'Confidential'] as const
 
 export function ProfilePage() {
   const { user } = useAuth()
   const navigate = useNavigate()
-  const [memories, setMemories] = useState<Memory[]>([])
-  const [nextCursor, setNextCursor] = useState<string | null>(null)
-  const [total, setTotal] = useState(0)
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(true)
+  const location = useLocation()
   const { theme, toggleTheme } = useTheme()
+  const [memoryCount, setMemoryCount] = useState<number | null>(null)
+  const [conversationCount, setConversationCount] = useState<number | null>(null)
 
-  async function loadMemories(next?: string | null) {
-    setLoading(true)
-    try {
-      const params = new URLSearchParams({ limit: '25' })
-      if (next) params.set('cursor', next)
-      const result = await api<{ items: Memory[]; total: number; next_cursor: string | null }>(`/api/v1/chat/memories?${params}`)
-      setMemories((current) => next ? [...current, ...result.items] : result.items)
-      setTotal(result.total); setNextCursor(result.next_cursor); setError('')
-    } catch (err) { setError(err instanceof Error ? err.message : 'Could not load personal memories.') }
-    finally { setLoading(false) }
-  }
-  useEffect(() => { void loadMemories() }, [])
+  useEffect(() => {
+    if (location.hash === '#preferences') {
+      document.getElementById('preferences')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+  }, [location.hash])
 
-  async function removeMemory(id: string) {
-    try {
-      await api(`/api/v1/chat/memories/${encodeURIComponent(id)}`, { method: 'DELETE' })
-      setMemories((current) => current.filter((item) => item.memory_id !== id))
-      setTotal((value) => Math.max(0, value - 1))
-    } catch (err) { setError(err instanceof Error ? err.message : 'Could not delete this memory.') }
-  }
+  useEffect(() => {
+    api<{ total: number }>('/api/v1/chat/memories?limit=1').then((r) => setMemoryCount(r.total)).catch(() => undefined)
+    api<Page<Conversation>>('/api/v1/chat/conversations?page=1&page_size=1').then((r) => setConversationCount(r.total)).catch(() => undefined)
+  }, [])
 
   if (!user) return null
   const initials = user.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase()
+  const userClearanceIdx = CLEARANCE_ORDER.indexOf(user.clearance_level as typeof CLEARANCE_ORDER[number])
+
   return <div className="admin-page profile-page">
-    <header className="page-header"><div><button className="back-link" onClick={() => navigate(-1)}><ArrowLeft size={15} /> Back</button><p className="eyebrow">ACCOUNT</p><h1>Your profile</h1><p className="page-subtitle">Your account details and personal context stored by Cortex.</p></div></header>
+    <header className="page-header"><div><button className="back-link" onClick={() => navigate(-1)}><ArrowLeft size={15} /> Back</button><p className="eyebrow">ACCOUNT</p><h1>Your profile</h1><p className="page-subtitle">Your account identity, workspace permissions, and preferences.</p></div></header>
+
     <div className="profile-grid">
-      <section className="panel profile-card"><div className="profile-hero"><span className="user-avatar profile-avatar">{initials}</span><div><h2>{user.name}</h2><p>{user.job_title}</p><span className="role-pill">{user.role}</span></div></div><div className="profile-details"><div><small>EMAIL</small><strong>{user.email}</strong></div><div><small>USERNAME</small><strong>{user.username}</strong></div><div><small>DEPARTMENT</small><strong>{user.department}</strong></div><div><small>CLEARANCE</small><strong>{user.clearance_level}</strong></div></div></section>
-      <section className="panel preferences-card"><div className="panel-heading"><div><p className="eyebrow">PREFERENCES</p><h2>Appearance</h2></div></div><div className="preference-row"><div><strong>Theme</strong><small>Choose a light or dark workspace.</small></div><button className="secondary-button" onClick={toggleTheme}>{theme === 'light' ? 'Switch to dark' : 'Switch to light'}</button></div><div className="preference-row"><div><strong>Session access</strong><small>Access is controlled by your role and clearance.</small></div><span className="status-pill">{user.is_active ? 'Active' : 'Inactive'}</span></div></section>
+      <section className="panel profile-card">
+        <div className="profile-hero"><span className="user-avatar profile-avatar">{initials}</span><div><h2>{user.name}</h2><p>{user.job_title}</p><span className="role-pill">{user.role}</span></div></div>
+        <div className="profile-details">
+          <div><small>EMAIL</small><strong>{user.email}</strong></div>
+          <div><small>USERNAME</small><strong>{user.username}</strong></div>
+          <div><small>DEPARTMENT</small><strong>{user.department}</strong></div>
+          <div><small>CLEARANCE</small><strong>{user.clearance_level}</strong></div>
+        </div>
+      </section>
+
+      <section id="preferences" className="panel preferences-card">
+        <div className="panel-heading"><div><p className="eyebrow">PREFERENCES</p><h2>Workspace settings</h2></div></div>
+        <div className="preference-row">
+          <div><strong>Appearance</strong><small>Currently using {theme} mode.</small></div>
+          <button className="secondary-button compact-button" onClick={toggleTheme}>
+            {theme === 'light' ? <><Moon size={13} /> Dark mode</> : <><Sun size={13} /> Light mode</>}
+          </button>
+        </div>
+        <div className="preference-row">
+          <div><strong>Session access</strong><small>Controlled by your role and clearance.</small></div>
+          <span className={`status-pill ${user.is_active ? 'active' : 'pending'}`}>{user.is_active ? 'Active' : 'Inactive'}</span>
+        </div>
+        <div className="preference-row">
+          <div><strong>Personal memories</strong><small>Manage facts and preferences Cortex remembers.</small></div>
+          <Link className="text-link" to="/memories">Manage <ArrowUpRight size={13} /></Link>
+        </div>
+      </section>
     </div>
-    <section className="panel memories-panel"><div className="panel-heading"><div><p className="eyebrow">PERSONAL CONTEXT</p><h2><Brain size={19} /> Memories</h2><p className="panel-subtitle">Facts Cortex has retained to make future conversations more useful. You can remove any item.</p></div><span className="count-label">{total} saved</span></div>
-      {error && <div className="inline-error">{error}</div>}
-      {loading && <div className="table-loading">Loading memories…</div>}
-      {!loading && memories.length === 0 && <div className="empty-state compact"><Brain size={24} /><p>No personal memories have been saved yet.</p></div>}
-      <div className="memory-list">{memories.map((memory) => <div className="memory-row" key={memory.memory_id}><div className="memory-dot" /><div className="memory-copy"><strong>{memory.text}</strong><small>{memory.category} {memory.created_at ? `· ${new Date(memory.created_at).toLocaleDateString()}` : ''}</small></div><button className="icon-button danger" onClick={() => void removeMemory(memory.memory_id)} aria-label="Delete memory"><Trash2 size={15} /></button></div>)}</div>
-      {nextCursor && <button className="secondary-button load-more-button" disabled={loading} onClick={() => void loadMemories(nextCursor)}>Load more memories</button>}
-    </section>
+
+    <div className="profile-grid">
+      <section className="panel profile-card">
+        <div className="panel-heading"><div><p className="eyebrow">DATA ACCESS SCOPE</p><h2><ShieldCheck size={17} /> Permissions & Clearance</h2></div></div>
+        <div className="clearance-tiers">
+          {CLEARANCE_ORDER.map((tier, idx) => {
+            const allowed = user.role === 'Admin' || idx <= userClearanceIdx
+            return (
+              <div className={`tier-row ${allowed ? 'allowed' : 'locked'}`} key={tier}>
+                {allowed ? <CheckCircle2 size={15} /> : <Lock size={14} />}
+                <div>
+                  <strong>{tier} documents</strong>
+                  <small>
+                    {tier === 'Public'
+                      ? 'Company-wide policies and general documentation'
+                      : user.role === 'Admin'
+                        ? 'Accessible across all departments (Enterprise Admin)'
+                        : `Scoped to ${user.department} department`}
+                  </small>
+                </div>
+                <span className={`status-pill ${allowed ? 'active' : ''}`}>{allowed ? 'Granted' : 'Restricted'}</span>
+              </div>
+            )
+          })}
+        </div>
+      </section>
+
+      <section className="panel profile-card">
+        <div className="panel-heading"><div><p className="eyebrow">WORKSPACE ACTIVITY</p><h2>Your summary</h2></div></div>
+        <div className="profile-stats-grid">
+          <Link to="/chat" className="profile-stat-box">
+            <MessageSquare size={16} />
+            <strong>{conversationCount ?? '—'}</strong>
+            <small>Conversations</small>
+          </Link>
+          <Link to="/memories" className="profile-stat-box">
+            <Brain size={16} />
+            <strong>{memoryCount ?? '—'}</strong>
+            <small>Saved memories</small>
+          </Link>
+        </div>
+        <div className="preference-row" style={{ marginTop: 14 }}>
+          <div><strong>Role capabilities</strong><small>{user.role === 'Admin' ? 'Full access to Control Room, Documents, People, and Audit trail.' : user.role === 'Manager' ? `Can upload and manage ${user.department} documents.` : 'Standard workspace search, integrations, and action drafts.'}</small></div>
+        </div>
+      </section>
+    </div>
   </div>
 }

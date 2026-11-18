@@ -6,6 +6,7 @@ import type { ChatMessage, CitationData, Conversation, Page } from '../api/types
 import { useAuth } from '../auth/AuthContext'
 import { CitationMarkdown } from '../components/CitationMarkdown'
 import { SourcesDrawer } from '../components/SourcesDrawer'
+import { ThemeButton, useTheme } from '../components/ThemeToggle'
 
 interface UIMessage extends ChatMessage {
   streaming?: boolean
@@ -51,6 +52,31 @@ function groupMessages(messages: UIMessage[]) {
   return output
 }
 
+function formatElapsed(seconds: number) {
+  if (seconds < 60) return `${seconds}s`
+  const mins = Math.floor(seconds / 60)
+  const secs = seconds % 60
+  return `${mins}m ${secs}s`
+}
+
+function CompactingTrace() {
+  const [elapsed, setElapsed] = useState(0)
+  useEffect(() => {
+    const startedAt = Date.now()
+    const timer = window.setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startedAt) / 1000))
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [])
+  return (
+    <div className="execution-trace compacting-trace" role="status" aria-live="polite">
+      <span className="compacting-shimmer">Compacting</span>
+      <span className="compacting-sep">·</span>
+      <span className="compacting-elapsed">{formatElapsed(elapsed)}</span>
+    </div>
+  )
+}
+
 function AssistantMessage({ message, variants, onOpenSources, onRegenerate, onFeedback, onSuggestion, feedbackSent, busy }: {
   message: UIMessage
   variants: UIMessage[]
@@ -68,12 +94,18 @@ function AssistantMessage({ message, variants, onOpenSources, onRegenerate, onFe
   const active = allVariants[Math.min(variantIndex, allVariants.length - 1)] || message
   const sources = citationData(active.citations)
   const hasSources = Boolean(sources?.citations.length || sources?.evidence_chunks.length)
+  const latestStep = active.steps && active.steps.length > 0 ? active.steps[active.steps.length - 1] : null
+  const isCompacting = Boolean(active.streaming && latestStep?.stage === 'compacting')
 
   return <article className="assistant-message">
     <div className="assistant-avatar">c</div>
     <div className="assistant-message-content">
-      <div className="assistant-author-row"><strong>Cortex</strong><span className="assistant-meta">{active.streaming ? 'Working' : active.interrupted ? 'Partial response' : 'Answer'}</span></div>
-      {active.steps && active.steps.length > 0 && active.streaming && <div className="execution-trace"><span className="trace-pulse" />{active.steps[active.steps.length - 1].message}</div>}
+      <div className="assistant-author-row"><strong>Cortex</strong><span className="assistant-meta">{isCompacting ? 'Compacting' : active.streaming ? 'Working' : active.interrupted ? 'Partial response' : 'Answer'}</span></div>
+      {latestStep && active.streaming && (
+        isCompacting
+          ? <CompactingTrace />
+          : <div className="execution-trace"><span className="trace-pulse" />{latestStep.message}</div>
+      )}
       {active.content ? <CitationMarkdown content={active.content} onOpenSource={(number) => onOpenSources(active, number)} /> : active.streaming ? <div className="typing-indicator"><i /><i /><i /></div> : null}
       {active.corpusGap && <div className="corpus-gap-card"><ShieldAlert size={17} /><div><strong>Knowledge gap detected</strong><p>{active.corpusGap.message}</p><small>Confidence: {active.corpusGap.confidence} · Score: {active.corpusGap.top_reranker_score ?? '—'}</small></div></div>}
       {active.actionDraft && <ActionDraftCard draft={active.actionDraft} />}
@@ -117,6 +149,7 @@ export function ChatPage() {
   const { conversationId } = useParams()
   const navigate = useNavigate()
   const { user, signOut } = useAuth()
+  const { theme, toggleTheme } = useTheme()
   const [messages, setMessages] = useState<UIMessage[]>([])
   const [input, setInput] = useState('')
   const [loadingHistory, setLoadingHistory] = useState(false)
@@ -267,7 +300,7 @@ export function ChatPage() {
   const firstName = user?.name.split(' ')[0] || 'there'
 
   return <div className="chat-page">
-    <header className="chat-topbar"><div className="chat-topbar-left"><span className="topbar-context">WORKSPACE</span><span className="topbar-divider">/</span><span>{conversationId ? 'Conversation' : 'New conversation'}</span></div><div className="chat-topbar-right"><span className="secure-session"><span /> Private workspace</span><div className="model-picker-wrap"><button className="model-picker" onClick={() => setShowModelPicker((value) => !value)}><span className="model-indicator" />{models.find((item) => item.id === selectedModel)?.name || 'Default model'}<ChevronDown size={14} /></button>{showModelPicker && <><button className="menu-dismiss" onClick={() => setShowModelPicker(false)} aria-label="Close model picker" /><div className="model-menu">{models.map((model) => <button key={model.id} className={selectedModel === model.id ? 'selected' : ''} onClick={() => { setSelectedModel(model.id); setShowModelPicker(false) }}><span><strong>{model.name}</strong><small>{model.provider} · {model.badge}</small></span>{selectedModel === model.id && <Check size={15} />}</button>)}</div></>}</div></div></header>
+    <header className="chat-topbar"><div className="chat-topbar-left"><span className="topbar-context">WORKSPACE</span><span className="topbar-divider">/</span><span>{conversationId ? 'Conversation' : 'New conversation'}</span></div><div className="chat-topbar-right"><span className="secure-session"><span /> Private workspace</span><div className="model-picker-wrap"><button className="model-picker" onClick={() => setShowModelPicker((value) => !value)}><span className="model-indicator" />{models.find((item) => item.id === selectedModel)?.name || 'Default model'}<ChevronDown size={14} /></button>{showModelPicker && <><button className="menu-dismiss" onClick={() => setShowModelPicker(false)} aria-label="Close model picker" /><div className="model-menu">{models.map((model) => <button key={model.id} className={selectedModel === model.id ? 'selected' : ''} onClick={() => { setSelectedModel(model.id); setShowModelPicker(false) }}><span><strong>{model.name}</strong><small>{model.provider} · {model.badge}</small></span>{selectedModel === model.id && <Check size={15} />}</button>)}</div></>}</div><ThemeButton theme={theme} onToggle={toggleTheme} /></div></header>
 
     <div className="chat-scroll" ref={scrollRef}>
       {isEmpty ? <div className="chat-empty-state"><div className="greeting-mark">c</div><p className="eyebrow">YOUR COMPANY KNOWLEDGE, CONNECTED</p><h1>{greeting()}, {firstName}.</h1><p className="empty-subtitle">What would you like to understand or get done today?</p><div className="prompt-grid">

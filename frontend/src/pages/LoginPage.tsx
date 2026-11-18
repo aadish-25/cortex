@@ -29,7 +29,7 @@ export function LoginPage() {
   return (
     <main className="auth-page">
       <section className="auth-brand-panel">
-        <div className="auth-brand"><span className="brand-mark">c</span><span>Cortex</span></div>
+        <div className="auth-brand"><span className="brand-mark">c</span><span>cortex</span></div>
         <div className="auth-brand-copy">
           <p className="eyebrow">ENTERPRISE KNOWLEDGE</p>
           <h1>Find the answer.<br /><span>Know where it came from.</span></h1>
@@ -39,7 +39,7 @@ export function LoginPage() {
       </section>
       <section className="auth-form-panel">
         <div className="auth-form-wrap">
-          <div className="mobile-auth-brand"><span className="brand-mark">c</span><span>Cortex</span></div>
+          <div className="mobile-auth-brand"><span className="brand-mark">c</span><span>cortex</span></div>
           <p className="eyebrow">WELCOME BACK</p>
           <h2>Sign in to Cortex</h2>
           <p className="auth-subtitle">Use your company username or email address.</p>

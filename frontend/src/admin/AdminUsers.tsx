@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Check, Pencil, Plus, Search, ShieldCheck, UserPlus, X } from 'lucide-react'
 import { api, ApiError } from '../api/client'
 import type { Page, User } from '../api/types'
@@ -20,6 +20,7 @@ export function AdminUsers() {
   const [selected, setSelected] = useState<User | null>(null)
   const [form, setForm] = useState(emptyForm)
   const [saving, setSaving] = useState(false)
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   async function load(nextPage = 1, options?: { search?: string; role?: string; active?: string }) {
     setLoading(true); setError('')
@@ -63,7 +64,7 @@ export function AdminUsers() {
   return <div className="admin-page">
     <header className="page-header"><div><p className="eyebrow">ACCESS CONTROL</p><h1>People</h1><p className="page-subtitle">Manage accounts, roles, departments and clearance levels.</p></div><button className="primary-button" onClick={openCreate}><UserPlus size={17} /> Add user</button></header>
     <section className="panel data-panel">
-      <div className="table-toolbar"><div className="search-field"><Search size={16} /><input placeholder="Search people by name or email" value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') void load(1) }} /><button onClick={() => void load(1)}>Search</button></div><div className="toolbar-filters"><select value={role} onChange={(e) => { const value = e.target.value; setRole(value); void load(1, { role: value }) }}><option value="">All roles</option><option value="Admin">Admin</option><option value="Manager">Manager</option><option value="Employee">Employee</option></select><select value={active} onChange={(e) => { const value = e.target.value; setActive(value); void load(1, { active: value }) }}><option value="">All accounts</option><option value="true">Active</option><option value="false">Pending / inactive</option></select><span className="count-label">{result?.total ?? 0} people</span></div></div>
+      <div className="table-toolbar"><div className="search-field"><Search size={16} /><input placeholder="Search people by name or email" value={search} onChange={(e) => { const v = e.target.value; setSearch(v); if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current); searchDebounceRef.current = setTimeout(() => void load(1, { search: v }), 300) }} /></div><div className="toolbar-filters"><select value={role} onChange={(e) => { const value = e.target.value; setRole(value); void load(1, { role: value }) }}><option value="">All roles</option><option value="Admin">Admin</option><option value="Manager">Manager</option><option value="Employee">Employee</option></select><select value={active} onChange={(e) => { const value = e.target.value; setActive(value); void load(1, { active: value }) }}><option value="">All accounts</option><option value="true">Active</option><option value="false">Pending / inactive</option></select><span className="count-label">{result?.total ?? 0} people</span></div></div>
       {error && <div className="inline-error table-error">{error}</div>}
       <div className="table-scroll"><table className="data-table"><thead><tr><th>Person</th><th>Department</th><th>Role</th><th>Clearance</th><th>Account</th><th>Joined</th><th className="actions-col">Manage</th></tr></thead><tbody>
         {loading && <tr><td colSpan={7} className="table-loading">Loading people…</td></tr>}

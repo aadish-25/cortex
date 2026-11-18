@@ -7,6 +7,7 @@ import { LoginPage } from './pages/LoginPage'
 import { RegisterPage } from './pages/RegisterPage'
 import { ChatPage } from './chat/ChatPage'
 import { ProfilePage } from './pages/ProfilePage'
+import { MemoriesPage } from './pages/MemoriesPage'
 import { AdminOverview } from './admin/AdminOverview'
 import { AdminDocuments } from './admin/AdminDocuments'
 import { AdminUsers } from './admin/AdminUsers'
@@ -23,6 +24,7 @@ export default function App() {
         <Route path="/chat" element={<ChatPage />} />
         <Route path="/chat/:conversationId" element={<ChatPage />} />
         <Route path="/profile" element={<ProfilePage />} />
+        <Route path="/memories" element={<MemoriesPage />} />
         <Route element={<AdminRoute />}>
           <Route path="/admin" element={<Navigate to="/admin/overview" replace />} />
           <Route path="/admin/overview" element={<AdminOverview />} />
