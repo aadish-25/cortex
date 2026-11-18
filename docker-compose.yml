@@ -12,7 +12,7 @@ services:
     environment:
       - QDRANT__SERVICE__GRPC_PORT=6334
 
-  # In-Memory Cache for SSE Stream Rehydration, LangChain Buffer & Rate Limiting
+  # In-Memory Cache for SSE Stream Rehydration, LangChain Buffer, Rate Limiting & Celery Broker
   redis:
     image: redis:latest
     container_name: cortex-redis
@@ -22,7 +22,7 @@ services:
     volumes:
       - redis_data:/data
 
-  # Production Relational Database (Optional for dev, matches production target)
+  # Production Relational Database
   postgres:
     image: postgres:16
     container_name: cortex-postgres
@@ -35,6 +35,31 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+
+  # Celery Background Worker (Async Document Reindexing & Vector Reconciliation)
+  celery:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cortex-celery
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cortex}:${POSTGRES_PASSWORD:-cortex_dev_password}@postgres:5432/${POSTGRES_DB:-cortex_db}
+      REDIS_URL: redis://redis:6379/0
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      QDRANT_URL: http://qdrant:6333
+    volumes:
+      - ./backend:/app/backend
+      - ./data:/app/data
+    depends_on:
+      - redis
+      - postgres
+      - qdrant
+    command: celery -A backend.worker.celery_app worker --concurrency=2 --max-tasks-per-child=50 --loglevel=info
+    mem_limit: 768m
 
 volumes:
   qdrant_data:

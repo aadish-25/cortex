@@ -26,7 +26,13 @@ from backend.worker.sweeper import run_reconciliation_sweeper
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(name="backend.worker.tasks.reindex_document_task", bind=True, max_retries=2)
+@celery_app.task(
+    name="backend.worker.tasks.reindex_document_task",
+    bind=True,
+    max_retries=2,
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
 def reindex_document_task(self, doc_id_str: str) -> Dict[str, Any]:
     """Rebuild a document's vectors from its retained original source file."""
     logger.info("Starting document reindex task for document_id=%s", doc_id_str)
@@ -113,7 +119,11 @@ def reindex_document_task(self, doc_id_str: str) -> Dict[str, Any]:
         return {"status": "FAILED", "error": "Reindex failed after retries"}
 
 
-@celery_app.task(name="backend.worker.tasks.reconcile_vector_store_task")
+@celery_app.task(
+    name="backend.worker.tasks.reconcile_vector_store_task",
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
 def reconcile_vector_store_task() -> Dict[str, Any]:
     """Run periodic bidirectional reconciliation between SQL and Qdrant."""
     async def _run():

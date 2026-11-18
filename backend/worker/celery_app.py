@@ -24,8 +24,11 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
     task_track_started=True,
-    task_time_limit=300,  # 5 minutes hard limit per task
-    worker_prefetch_multiplier=1,
+    task_acks_late=True,              # Acknowledge only after task succeeds (safe re-delivery on crash/OOM)
+    task_reject_on_worker_lost=True,  # Re-queue task if worker is SIGKILL'd (e.g., Docker OOM Killer exit 137)
+    task_time_limit=300,              # 5 minutes hard limit per task
+    worker_prefetch_multiplier=1,     # Pull 1 task at a time so other tasks stay queued in Redis
+    broker_transport_options={"visibility_timeout": 600},  # Re-deliver unacked tasks if container vanishes (> task_time_limit)
     beat_schedule={
         # Decision D8: Bidirectional reconciliation sweeper runs every 10 minutes
         "reconcile_vector_store_every_10_mins": {
