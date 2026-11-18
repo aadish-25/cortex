@@ -481,14 +481,15 @@ async def get_query_analytics(
     """Return daily query counts from the dedicated quality telemetry ledger."""
     days = min(max(days, 1), 90)
     since = datetime.now(timezone.utc) - timedelta(days=days)
+    ist_day_expr = func.date(func.timezone("Asia/Kolkata", QueryQualityLog.created_at))
     stmt = (
         select(
-            func.date(QueryQualityLog.created_at).label("day"),
+            ist_day_expr.label("day"),
             func.count(QueryQualityLog.id).label("count"),
         )
         .where(QueryQualityLog.created_at >= since)
-        .group_by(func.date(QueryQualityLog.created_at))
-        .order_by(func.date(QueryQualityLog.created_at))
+        .group_by(ist_day_expr)
+        .order_by(ist_day_expr)
     )
     result = await session.execute(stmt)
     daily_rows = result.all()
