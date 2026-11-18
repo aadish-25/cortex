@@ -133,19 +133,7 @@ async def execute_web_search(
     except Exception as exc:
         logger.warning("Live web search failed or timed out (%s). Using fallback external search result.", exc)
 
-    # If external network search is unreachable (e.g. sandbox/offline), provide structured fallback
-    if not results:
-        fallback_snippet = f"External market verification benchmark for: {scrubbed_query}."
-        sanitized_snippet, had_injection = sanitize_inbound_web_snippet(fallback_snippet)
-        xml_block = wrap_in_untrusted_xml("External Knowledge Verification", "https://verified-external-source.org", sanitized_snippet)
-        results.append(
-            WebSearchResult(
-                title="External Knowledge Verification",
-                url="https://verified-external-source.org",
-                snippet=sanitized_snippet,
-                is_sanitized=had_injection,
-                sandboxed_xml=xml_block,
-            )
-        )
-
+    # F2 Fix: If external search is unreachable, return empty list.
+    # Never fabricate a source URL or snippet — callers must handle empty results explicitly.
+    # (Previously returned a fake "verified-external-source.org" result, violating Decision D25.)
     return results

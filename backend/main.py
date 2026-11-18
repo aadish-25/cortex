@@ -46,9 +46,10 @@ async def health_check():
 
 
 # Register Routers
-from backend.routers import actions, auth, chat, documents, users
+from backend.routers import actions, admin, auth, chat, documents, users
 app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(documents.router)
 app.include_router(actions.router)
 app.include_router(chat.router)
+app.include_router(admin.router)

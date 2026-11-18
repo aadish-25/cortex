@@ -1,0 +1,343 @@
+"""
+AdminAgent — Autonomous Operational Intelligence Agent (Phase 7, PRD 10.6, Decision D26)
+
+Equips System Administrators (Role.ADMIN) with operational chat tools:
+  - inspect_audit_logs(limit, user_id, category)
+  - get_document_status(filename_or_id)
+  - trigger_reindex(document_id)
+  - inspect_system_health()
+  - replace_document_version(document_id, file_bytes)
+
+Strict RBAC Guard: Every tool execution explicitly verifies user.role == Role.ADMIN.
+Non-admin requests are refused immediately with an audit log record.
+"""
+
+import logging
+import re
+import uuid
+from typing import Any, Dict, List, Optional, Tuple
+
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import select
+
+from backend.models.document import Document
+from backend.models.enums import AuditCategory, Role
+from backend.models.user import User
+from backend.services.admin.admin_service import (
+    get_document_status,
+    inspect_system_health,
+    query_audit_logs,
+    replace_document_version,
+    trigger_document_reindex,
+)
+from backend.services.auth.audit_service import log_audit_event
+
+logger = logging.getLogger(__name__)
+
+UUID_PATTERN = re.compile(
+    r"\b([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b",
+    re.IGNORECASE,
+)
+
+# Tool metadata for LLM function calling
+ADMIN_TOOL_DEFINITIONS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "inspect_system_health",
+            "description": "Inspect live operational health and connectivity of PostgreSQL, Redis, and Qdrant clusters.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "inspect_audit_logs",
+            "description": "Fetch recent zero-PII audit trail logs, optionally filtered by category or limit.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "description": "Number of logs to fetch (1-100)", "default": 20},
+                    "category": {"type": "string", "enum": ["AUTH", "DOCUMENT", "QUERY", "WORKFLOW", "ADMIN"], "description": "Optional category filter"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_document_status",
+            "description": "Check the version, is_live status, and indexing state of a document by filename or UUID.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "identifier": {"type": "string", "description": "Document filename (e.g. 'leave_policy.md') or UUID string"},
+                },
+                "required": ["identifier"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "trigger_reindex",
+            "description": "Trigger an asynchronous re-indexing task for a specified document UUID.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "string", "description": "Document UUID to reindex"},
+                },
+                "required": ["document_id"],
+            },
+        },
+    },
+]
+
+
+class AdminAgent:
+    """
+    Autonomous operational agent executing administrative chat tools with strict RBAC guards.
+    """
+
+    async def execute_tool(
+        self,
+        session: AsyncSession,
+        user: User,
+        tool_name: str,
+        arguments: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Executes an admin tool under strict RBAC validation.
+        Refuses execution if user.role != Role.ADMIN.
+        """
+        arguments = arguments or {}
+
+        # Strict RBAC Guard (PRD 10.6)
+        if user.role != Role.ADMIN:
+            await log_audit_event(
+                session=session,
+                event_tag="ADMIN_TOOL_REFUSED",
+                category=AuditCategory.ADMIN,
+                user_id=user.id,
+                status_code=403,
+                details=f"Non-admin user '{user.username}' attempted admin tool '{tool_name}'",
+            )
+            return {
+                "status": "REFUSED",
+                "error": "Permission denied: Administrative clearance required.",
+            }
+
+        logger.info("Admin '%s' executing tool '%s' with args %s", user.username, tool_name, arguments)
+
+        try:
+            if tool_name == "inspect_system_health":
+                health_data = await inspect_system_health(session)
+                await log_audit_event(
+                    session=session,
+                    event_tag="ADMIN_HEALTH_CHECK",
+                    category=AuditCategory.ADMIN,
+                    user_id=user.id,
+                    status_code=200,
+                    details="Admin executed system health inspection",
+                )
+                return {
+                    "status": "SUCCESS",
+                    "tool": tool_name,
+                    "data": health_data,
+                }
+
+            elif tool_name == "inspect_audit_logs":
+                limit = int(arguments.get("limit", 20))
+                category_str = arguments.get("category")
+                category_enum = None
+                if category_str:
+                    try:
+                        category_enum = AuditCategory(category_str.upper())
+                    except ValueError:
+                        category_enum = None
+
+                logs = await query_audit_logs(
+                    session=session,
+                    category=category_enum,
+                    limit=min(limit, 100),
+                )
+                await log_audit_event(
+                    session=session,
+                    event_tag="ADMIN_AUDIT_QUERY",
+                    category=AuditCategory.ADMIN,
+                    user_id=user.id,
+                    status_code=200,
+                    details=f"Admin queried {len(logs)} audit logs (category={category_str})",
+                )
+                return {
+                    "status": "SUCCESS",
+                    "tool": tool_name,
+                    "count": len(logs),
+                    "logs": [
+                        {
+                            "id": str(l.id),
+                            "event_tag": l.event_tag,
+                            "category": l.category.value,
+                            "status_code": l.status_code,
+                            "details": l.details,
+                            "created_at": l.created_at.isoformat(),
+                        }
+                        for l in logs
+                    ],
+                }
+
+            elif tool_name == "get_document_status":
+                identifier = arguments.get("identifier", "").strip()
+                if not identifier:
+                    return {"status": "ERROR", "error": "Document identifier required."}
+
+                # Try parsing as UUID
+                uuid_match = UUID_PATTERN.search(identifier)
+                doc = None
+                if uuid_match:
+                    doc_uuid = uuid.UUID(uuid_match.group(1))
+                    try:
+                        doc = await get_document_status(session, doc_uuid)
+                    except ValueError:
+                        doc = None
+                else:
+                    # Lookup by filename (most recent version)
+                    stmt = (
+                        select(Document)
+                        .where(Document.filename == identifier)
+                        .order_by(Document.version.desc())  # type: ignore[arg-type]
+                    )
+                    res = await session.exec(stmt)
+                    doc = res.first()
+
+                if not doc:
+                    return {
+                        "status": "NOT_FOUND",
+                        "error": f"Document '{identifier}' not found in registry.",
+                    }
+
+                return {
+                    "status": "SUCCESS",
+                    "tool": tool_name,
+                    "document": {
+                        "id": str(doc.id),
+                        "filename": doc.filename,
+                        "version": doc.version,
+                        "status": doc.status.value,
+                        "is_live": doc.is_live,
+                        "department": doc.department,
+                        "clearance_level": doc.clearance_level.value,
+                        "uploaded_at": doc.uploaded_at.isoformat() if doc.uploaded_at else None,
+                    },
+                }
+
+            elif tool_name == "trigger_reindex":
+                raw_id = arguments.get("document_id", "")
+                uuid_match = UUID_PATTERN.search(str(raw_id))
+                if not uuid_match:
+                    return {"status": "ERROR", "error": f"Invalid document UUID: {raw_id}"}
+
+                doc_id = uuid.UUID(uuid_match.group(1))
+                reindex_result = await trigger_document_reindex(session, doc_id)
+                await log_audit_event(
+                    session=session,
+                    event_tag="ADMIN_REINDEX_TRIGGER",
+                    category=AuditCategory.ADMIN,
+                    user_id=user.id,
+                    status_code=200,
+                    details=f"Triggered reindex for document {doc_id}",
+                )
+                return {
+                    "status": "SUCCESS",
+                    "tool": tool_name,
+                    "result": reindex_result,
+                }
+
+            elif tool_name == "replace_document_version":
+                raw_id = arguments.get("document_id", "")
+                uuid_match = UUID_PATTERN.search(str(raw_id))
+                if not uuid_match:
+                    return {"status": "ERROR", "error": f"Invalid document UUID: {raw_id}"}
+
+                doc_id = uuid.UUID(uuid_match.group(1))
+                file_bytes = arguments.get("file_bytes", b"")
+                if isinstance(file_bytes, str):
+                    file_bytes = file_bytes.encode("utf-8")
+
+                replace_res = await replace_document_version(
+                    session=session,
+                    doc_id=doc_id,
+                    file_bytes=file_bytes,
+                    new_filename=arguments.get("new_filename"),
+                )
+                return {
+                    "status": "SUCCESS",
+                    "tool": tool_name,
+                    "result": replace_res,
+                }
+
+            else:
+                return {"status": "UNKNOWN_TOOL", "error": f"Tool '{tool_name}' is not recognized."}
+
+        except Exception as exc:
+            logger.error("Admin tool '%s' execution failed: %s", tool_name, exc, exc_info=True)
+            return {"status": "EXECUTION_ERROR", "error": str(exc)}
+
+    def format_response(self, tool_name: str, result: Dict[str, Any]) -> str:
+        """
+        Formats tool output into structured markdown for the chat interface.
+        """
+        if result.get("status") == "REFUSED":
+            return f"⚠️ **Administrative Access Refused:** {result.get('error')}"
+
+        if result.get("status") != "SUCCESS":
+            return f"❌ **Admin Tool Error:** {result.get('error', 'Execution failed')}"
+
+        if tool_name == "inspect_system_health":
+            data = result.get("data", {})
+            overall = data.get("overall", "UNKNOWN")
+            services = data.get("services", {})
+            lines = [f"### System Health Status: **{overall}**\n"]
+            for sname, sinfo in services.items():
+                icon = "🟢" if sinfo.get("status") == "UP" else "🟡" if sinfo.get("status") == "DEGRADED" else "🔴"
+                lines.append(f"- {icon} **{sname.title()}**: `{sinfo.get('status')}` ({sinfo.get('detail')})")
+            return "\n".join(lines)
+
+        elif tool_name == "inspect_audit_logs":
+            logs = result.get("logs", [])
+            if not logs:
+                return "ℹ️ No recent audit logs found matching criteria."
+            lines = [f"### Recent Audit Trail ({len(logs)} records)\n"]
+            for l in logs[:10]:
+                lines.append(f"- `{l['created_at'][:19]}` | **{l['category']}** | `{l['event_tag']}` (HTTP {l['status_code']}): {l.get('details') or ''}")
+            return "\n".join(lines)
+
+        elif tool_name == "get_document_status":
+            doc = result.get("document", {})
+            return (
+                f"### Document Status: `{doc.get('filename')}`\n"
+                f"- **ID**: `{doc.get('id')}`\n"
+                f"- **Version**: `v{doc.get('version')}`\n"
+                f"- **Status**: `{doc.get('status')}`\n"
+                f"- **Is Live**: `{'Yes' if doc.get('is_live') else 'No'}`\n"
+                f"- **Department**: `{doc.get('department')}`\n"
+                f"- **Clearance**: `{doc.get('clearance_level')}`"
+            )
+
+        elif tool_name == "trigger_reindex":
+            r = result.get("result", {})
+            return f"✅ **Re-indexing Dispatched**: Document `{r.get('filename')}` v{r.get('version')} status is now `{r.get('status')}`."
+
+        elif tool_name == "replace_document_version":
+            r = result.get("result", {})
+            return f"✅ **New Version Staged**: Document `{r.get('filename')}` v{r.get('version')} staged for ingestion."
+
+        return str(result)
+
+
+admin_agent = AdminAgent()

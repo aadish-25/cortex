@@ -1,0 +1,1 @@
+export default function Brand({small=false}:{small?:boolean}){return <div className={`brand ${small?'brand-small':''}`}><div className="brand-mark"><span/></div><div className="brand-word">cortex<span>®</span></div></div>}

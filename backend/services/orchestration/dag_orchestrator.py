@@ -24,6 +24,8 @@ class OrchestratorResponse:
     plan: ExecutionPlan
     final_response: str
     citations: List[str] = field(default_factory=list)
+    citation_map: Dict[int, str] = field(default_factory=dict)  # F4: {1: "source string", ...}
+    evidence_chunks: List[Dict[str, Any]] = field(default_factory=list)  # F8: [{anchor, chunk_id, citation, section}]
     action_draft: Optional[Dict[str, Any]] = None
     confidence: ConfidenceLevel = ConfidenceLevel.HIGH
 
@@ -80,6 +82,13 @@ async def execute_task(
             query=task.query,
             max_results=3,
         )
+        # F2 Fix: empty list means search was unavailable — return structured unavailable dict
+        if not web_results:
+            return {
+                "status": "SEARCH_UNAVAILABLE",
+                "query": task.query,
+                "message": "External search is currently unavailable. No external sources were consulted.",
+            }, []
         citations = [r.url for r in web_results]
         return web_results, citations
 
@@ -164,12 +173,19 @@ def synthesis_join_node(
     plan: ExecutionPlan,
     task_outputs: Dict[int, Any],
     all_citations: List[str],
-) -> str:
+) -> tuple[str, Dict[int, str], List[Dict[str, Any]]]:
     """
     Synthesis Join Node (PRD 6.1):
     Merges resolved sub-task outputs into a cohesive markdown response.
+
+    F4 Fix: Returns a (response_text, citation_map, evidence_chunks) tuple where
+    citation_map maps numeric anchors {1: "citation_string", ...} and evidence_chunks
+    contains exact chunk_ids for the 3-chunk evidence drawer (PRD 10.3).
     """
     response_sections: List[str] = []
+    citation_map: Dict[int, str] = {}  # {anchor_num: citation_string}
+    evidence_chunks: List[Dict[str, Any]] = []
+    anchor_counter = 0
 
     for task in plan.tasks:
         output = task_outputs.get(task.id)
@@ -180,13 +196,34 @@ def synthesis_join_node(
             if output.fallback_message:
                 response_sections.append(output.fallback_message)
             elif output.chunks:
-                # Present top verified chunks
-                chunk_texts = [f"- {c.text}" for c in output.chunks[:3]]
-                response_sections.append("\n".join(chunk_texts))
+                # F4 Fix: Number each chunk and build citation map
+                # F8 Fix: Retain chunk_id for evidence drawer context
+                numbered_chunks = []
+                for chunk in output.chunks[:5]:
+                    anchor_counter += 1
+                    citation_map[anchor_counter] = chunk.citation
+                    evidence_chunks.append({
+                        "anchor": anchor_counter,
+                        "chunk_id": getattr(chunk, "chunk_id", ""),
+                        "citation": chunk.citation,
+                        "section": getattr(chunk, "section", ""),
+                        "department": getattr(chunk, "department", ""),
+                    })
+                    numbered_chunks.append(
+                        f"[{anchor_counter}] [{chunk.citation}]\n{chunk.text}"
+                    )
+                citation_index = "\n".join(
+                    f"[{n}] {c}" for n, c in citation_map.items()
+                )
+                chunk_block = "\n\n".join(numbered_chunks)
+                response_sections.append(
+                    f"{chunk_block}\n\nCitation Map:\n{citation_index}"
+                )
 
         elif isinstance(output, list) and output and isinstance(output[0], WebSearchResult):
-            web_texts = [f"- **{w.title}**: {w.snippet}" for w in output]
-            response_sections.append("### External Sources\n" + "\n".join(web_texts))
+            # F3 Fix: Use sandboxed_xml (Decision D25 isolation) instead of bare snippets
+            xml_blocks = "\n".join(w.sandboxed_xml for w in output)
+            response_sections.append(f"<external_web_sources>\n{xml_blocks}\n</external_web_sources>")
 
         elif isinstance(output, str):
             response_sections.append(output)
@@ -198,6 +235,9 @@ def synthesis_join_node(
                 response_sections.append(f"**Action Notice:** {output.get('message')}")
             elif output.get("status") == "RATE_LIMITED":
                 response_sections.append(f"> ⚠️ {output.get('message')}")
+            elif output.get("status") == "SEARCH_UNAVAILABLE":
+                # F2 Fix: Search unavailable — do not fabricate sources
+                response_sections.append(f"> ℹ️ {output.get('message')}")
             elif output.get("items"):  # GitHub code search
                 items = [f"- [`{item['name']}`]({item['html_url']}): {item.get('path')}" for item in output["items"]]
                 response_sections.append(f"### GitHub Code Search ({output.get('query')})\n" + "\n".join(items))
@@ -215,7 +255,7 @@ def synthesis_join_node(
             else:
                 response_sections.append(output.get("message", ""))
 
-    return "\n\n".join(response_sections)
+    return "\n\n".join(response_sections), citation_map, evidence_chunks
 
 
 async def orchestrate_dag_execution(
@@ -272,7 +312,7 @@ async def orchestrate_dag_execution(
         all_citations.extend(cites)
 
     # Step 5: Synthesis Join Node
-    final_text = synthesis_join_node(plan, task_outputs, all_citations)
+    final_text, citation_map, evidence_chunks = synthesis_join_node(plan, task_outputs, all_citations)
 
     # Determine overall confidence and extract action draft if present
     overall_confidence = ConfidenceLevel.HIGH
@@ -290,6 +330,8 @@ async def orchestrate_dag_execution(
         plan=plan,
         final_response=final_text,
         citations=deduped_citations,
+        citation_map=citation_map,  # F4: numbered anchor map
+        evidence_chunks=evidence_chunks,  # F8: exact chunk_ids for evidence drawer
         action_draft=action_draft_payload,
         confidence=overall_confidence,
     )

@@ -241,3 +241,121 @@ async def test_submit_message_feedback(auth_headers, test_user):
         data = res.json()
         assert data["status"] == "success"
         assert "feedback_id" in data
+
+
+
+@pytest.mark.asyncio
+async def test_list_and_delete_user_memories(auth_headers, test_user):
+    """F5 Test: Verifies listing and deleting personal archival memories."""
+    from unittest.mock import patch, AsyncMock
+    fake_memories = [
+        {"memory_id": "mem-123", "text": "Prefers dark mode", "category": "PREFERENCE", "created_at": "2026-01-01T00:00:00Z"},
+    ]
+    with patch(
+        "backend.services.orchestration.episodic_memory_service.episodic_memory_service.list_memories",
+        new=AsyncMock(return_value=fake_memories),
+    ), patch(
+        "backend.services.orchestration.episodic_memory_service.episodic_memory_service.delete_memory",
+        new=AsyncMock(return_value=True),
+    ):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            res = await client.get("/api/v1/chat/memories", headers=auth_headers)
+            assert res.status_code == 200
+            data = res.json()
+            assert len(data) == 1
+            assert data[0]["memory_id"] == "mem-123"
+            assert data[0]["text"] == "Prefers dark mode"
+
+            del_res = await client.delete("/api/v1/chat/memories/mem-123", headers=auth_headers)
+            assert del_res.status_code == 200
+            assert del_res.json()["deleted"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_evidence_context_not_found(auth_headers):
+    """F8 Test: Verifies 404 response when requested chunk is not found in Qdrant."""
+    from unittest.mock import patch, MagicMock
+    mock_client = MagicMock()
+    mock_client.retrieve.return_value = []
+    with patch("backend.db.qdrant.get_qdrant_client", return_value=mock_client):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            res = await client.get("/api/v1/chat/evidence/nonexistent-chunk-id", headers=auth_headers)
+            assert res.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_evidence_context_success(auth_headers, test_user):
+    """F8 Test: Verifies 3-chunk sandwich context retrieval with RBAC compliance."""
+    from unittest.mock import patch, MagicMock
+    from qdrant_client import models as qmodels
+
+    target_point = MagicMock()
+    target_point.id = "target-uuid"
+    target_point.payload = {
+        "text": "Target cited clause.",
+        "citation": "Policy A, Section 1",
+        "section": "Section 1",
+        "department": test_user.department,
+        "clearance_level": "Internal",
+        "doc_id": "doc-001",
+        "chunk_index": 2,
+    }
+
+    mock_client = MagicMock()
+    mock_client.retrieve.return_value = [target_point]
+
+    preceding_point = MagicMock()
+    preceding_point.id = "prec-uuid"
+    preceding_point.payload = {
+        "text": "Preceding context clause.",
+        "citation": "Policy A, Section 1",
+        "section": "Section 1",
+        "department": test_user.department,
+        "clearance_level": "Internal",
+        "doc_id": "doc-001",
+        "chunk_index": 1,
+    }
+    succeeding_point = MagicMock()
+    succeeding_point.id = "succ-uuid"
+    succeeding_point.payload = {
+        "text": "Succeeding context clause.",
+        "citation": "Policy A, Section 2",
+        "section": "Section 2",
+        "department": test_user.department,
+        "clearance_level": "Internal",
+        "doc_id": "doc-001",
+        "chunk_index": 3,
+    }
+
+    mock_client.scroll.return_value = ([preceding_point, succeeding_point], None)
+
+    with patch("backend.db.qdrant.get_qdrant_client", return_value=mock_client):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            res = await client.get("/api/v1/chat/evidence/target-uuid", headers=auth_headers)
+            assert res.status_code == 200
+            data = res.json()
+            assert data["target"]["chunk_id"] == "target-uuid"
+            assert data["target"]["text"] == "Target cited clause."
+            assert data["preceding"]["text"] == "Preceding context clause."
+            assert data["succeeding"]["text"] == "Succeeding context clause."
+
+
+@pytest.mark.asyncio
+async def test_send_chat_message_with_client_message_id(auth_headers, test_user):
+    """F9 Test: Verifies POST /api/v1/chat/message accepts a client-provided message_id."""
+    client_msg_id = str(uuid.uuid4())
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.post(
+            "/api/v1/chat/message",
+            json={
+                "message": "Hello with custom id",
+                "message_id": client_msg_id,
+            },
+            headers=auth_headers,
+        )
+        assert res.status_code == 200
+        assert "text/event-stream" in res.headers["content-type"]

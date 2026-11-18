@@ -128,21 +128,30 @@ async def rewrite_query(
     summary: Optional[str] = None,
 ) -> tuple[str, bool]:
     """
-    Conversational Query Rewriting Node (PRD 6.2 & Decision D28):
+    Conversational Query Rewriting Node (PRD 6.2 & Decision D16):
     1. Turn 1 (history empty): 0ms Zero-Latency Bypass.
-    2. Turn 2+ (LiteLLM Gateway configured): Full semantic anaphora and referent resolution in any language (English/Hinglish).
-    3. Turn 2+ (Offline fallback): Heuristic pronoun and recency check.
+    2. Turn 2+ Pronoun Trigger Rule (Decision D16): Only queries containing pronouns or
+       relational references (e.g. 'it', 'that', 'those', 'what about', 'same for') trigger
+       rewriting. Standalone queries bypass rewriting entirely (0ms overhead).
+    3. Targeted 2-Turn Window (Decision D16): Restricts history to strictly the last 2 turns
+       (max 4 messages) to prevent context drift and hallucinations.
     Returns (resolved_query, was_rewritten).
     """
     # 1. Turn 1 Zero-Latency Bypass (0ms overhead)
     if not history:
         return query, False
 
-    conversation_context = format_conversation_history(history, max_turns=10, summary=summary)
+    # 2. Strict Pronoun/Anaphora Trigger Guard (Decision D16)
+    # If the user query is already self-contained with no relational anaphora, bypass rewriting
+    if not detect_anaphora_or_pronoun(query):
+        return query, False
+
+    # 3. Targeted 2-Turn Window (Decision D16: strictly last 2 turns = max 4 messages)
+    conversation_context = format_conversation_history(history, max_turns=2, summary=summary)
     if not conversation_context:
         return query, False
 
-    # 2. Primary Path: LiteLLM Gateway
+    # 4. Primary Path: LiteLLM Gateway
     if llm_service.is_configured():
         prompt = (
             "You are an expert conversational query rewriter.\n"
@@ -150,7 +159,7 @@ async def rewrite_query(
             "1. Determine whether the query references past conversation, pronouns ('it', 'that', 'those'), or missing context in English or Hinglish.\n"
             "2. Rewrite the user's question into a self-contained, standalone question resolving all pronouns and missing entities.\n"
             "3. If it is general chit-chat, identify it as chit-chat and do not alter the query.\n\n"
-            f"Conversation History:\n{conversation_context}\n\n"
+            f"Conversation History (Last 2 Turns):\n{conversation_context}\n\n"
             f"User Follow-up Question: {query}\n"
         )
         try:
@@ -165,15 +174,14 @@ async def rewrite_query(
         except Exception as exc:
             logger.warning("LLM query rewriting failed, falling back to heuristic fusion: %s", exc)
 
-    # 3. Deterministic heuristic fallback (when offline or no API key configured)
-    if not detect_anaphora_or_pronoun(query):
-        return query, False
-
+    # 5. Deterministic heuristic fallback (when offline or no API key configured)
     recent_turns = extract_recent_history_window(history, max_messages=4)
     last_user_msg = next((m for m in reversed(recent_turns) if m.role == ChatRole.USER), None)
     if last_user_msg:
         heuristic_query = f"{query} (in context of: {last_user_msg.content})"
         return heuristic_query, True
+
+    return query, False
 
     return query, False
 
