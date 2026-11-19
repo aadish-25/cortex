@@ -81,6 +81,30 @@ Modern agentic interfaces decouple chat text from visual artifacts:
 
 ---
 
+### 1.4 RAG Source Diversity & Anti-Domination Pipeline (MMR & Per-Document Quotas)
+
+#### The Problem: "Source Monopolization"
+When executing enterprise RAG on broad or multi-faceted queries (e.g., *"What is our equipment reimbursement policy and how does it relate to remote work allowances?"*), a single large, keyword-dense document (Document A) often produces several consecutive or overlapping high-scoring chunks (e.g., ranks 1 through 5 scoring 0.88 down to 0.82). Meanwhile, a crucial secondary source (Document B) with a complementary rule scoring 0.80 is completely crowded out.
+Consequently:
+- The top-5 context window is monopolized by a single document.
+- The synthesis LLM receives a one-sided context and may falsely conclude that no verified information exists for the secondary topic.
+- Overlapping sliding-window chunks repeat redundant boilerplate text, wasting LLM context window tokens without adding novel facts.
+
+#### Architectural Solution & Proposed Implementation
+1. **Per-Document Quota / Round-Robin Diversity Selector**:
+   - In `backend/services/retrieval/reranker_service.py`, after cross-encoder scoring, implement a diversity selector that caps any single `document_id` to at most $M$ chunks (e.g., $M = 2$) within the top $K$ (e.g., $K = 5$).
+   - If Document A has chunks ranked #1, #2, #3, #4, the selector preserves #1 and #2, then skips to #5 (Document B) and #6 (Document C) to complete the final context.
+   - Provides guaranteed multi-source coverage with deterministic $O(N)$ execution and 0ms latency overhead.
+2. **Maximal Marginal Relevance (MMR) & Semantic Deduplication**:
+   - For candidate chunks, compute pairwise embedding similarity against already-selected chunks.
+   - Apply an MMR marginal novelty penalty:
+     $$\text{Score}_{\text{MMR}}(c_i) = \lambda \cdot \text{Score}_{\text{CrossEncoder}}(c_i, q) - (1 - \lambda) \cdot \max_{c_j \in S} \text{Sim}(c_i, c_j)$$
+   - Strongly demotes near-identical chunks ($\text{Sim} > 0.85$) in favor of passages that bring fresh facts or counter-clauses.
+3. **Cross-Source Grounded Synthesis**:
+   - Extend `build_sandboxed_prompt` to group retrieved chunks by document title in `<retrieved_context>` tags and enforce balanced attribution across all represented sources.
+
+---
+
 ## 2. Moderate Complexity Scope (Medium-Term Enhancements)
 
 These features involve integrations with external worker pipelines, scheduled cron tasks, or cross-service state synchronization.
