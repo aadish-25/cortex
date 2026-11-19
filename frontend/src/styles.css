@@ -557,7 +557,6 @@ button.suggestion-pill:hover { background: var(--primary-line); }
 .memories-panel .panel-subtitle { margin: 6px 0 0; }
 .count-label { white-space: nowrap; }
 .memory-list { display: flex; flex-direction: column; }
-.memory-row { display: flex; align-items: center; gap: 11px; min-height: 54px; border-top: 1px solid var(--border); }
 .memory-dot { width: 6px; height: 6px; background: var(--primary); border-radius: 50%; }
 .memory-copy { display: flex; flex: 1; flex-direction: column; gap: 3px; min-width: 0; }
 .memory-copy strong { font-size: 10px; font-weight: 600; }
@@ -712,18 +711,126 @@ button.suggestion-pill:hover { background: var(--primary-line); }
 /* Intelligent Memory Management UI */
 .memory-header-actions { display: flex; align-items: center; gap: 10px; }
 .memory-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
-.memory-bulk-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 38px; padding: 4px 0 8px; }
-.memory-select-box { display: grid; place-items: center; padding: 4px; color: var(--muted); background: transparent; border: 0; border-radius: 5px; cursor: pointer; transition: color 0.15s ease; }
-.memory-select-box:hover { color: var(--primary); background: var(--surface-hover); }
-.memory-select-box.selected { color: var(--primary, #2563eb); }
-.memory-row.row-selected { background: color-mix(in srgb, var(--primary) 6%, transparent); border-radius: 8px; }
+.memory-bulk-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 42px;
+  min-height: 42px;
+  max-height: 42px;
+  padding: 0 16px;
+  margin-bottom: 6px;
+  box-sizing: border-box;
+}
+.memory-bulk-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.memory-select-all-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 12px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+.memory-select-all-btn:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+}
+.memory-select-all-btn.active {
+  color: var(--primary);
+  background: var(--primary-soft);
+  border-color: var(--primary-line);
+}
+.memory-select-all-btn svg {
+  flex-shrink: 0;
+}
+.memory-select-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  margin-left: 2px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 0.15s ease, background-color 0.15s ease;
+  flex-shrink: 0;
+}
+.memory-select-box:hover {
+  color: var(--primary);
+  background: var(--surface-hover);
+}
+.memory-select-box.selected {
+  color: var(--primary, #2563eb);
+}
+.memory-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 58px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  box-sizing: border-box;
+  transition: background-color 0.15s ease;
+}
+.memory-row:hover {
+  background: var(--surface-hover);
+}
+.memory-row.row-selected {
+  background: color-mix(in srgb, var(--primary) 6%, transparent);
+  border-radius: 8px;
+}
+.memory-row.superseded {
+  opacity: 0.72;
+}
+.memory-row .row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  margin-right: 2px;
+  flex-shrink: 0;
+}
 .memory-meta-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 2px; }
 .memory-meta-row .category-tag { color: var(--primary); background: var(--primary-soft); text-transform: capitalize; }
-.memory-row.superseded { opacity: 0.72; }
-.memory-row { padding: 8px 0; }
 .muted-link { color: var(--muted); font-weight: 600; }
 .danger-text { color: var(--danger); }
 .danger-button { background: var(--danger); border-color: var(--danger); }
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 95;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(8, 10, 14, 0.48);
+  backdrop-filter: blur(2px);
+}
+.modal-card {
+  width: min(440px, 100%);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
 .memory-event-card { display: flex; align-items: center; gap: 10px; margin: 10px 0; padding: 9px 12px; background: var(--primary-soft); border: 1px solid var(--primary-line); border-radius: 9px; font-size: 11px; }
 .memory-event-card svg { color: var(--primary); flex-shrink: 0; }
 .memory-event-copy { display: flex; flex: 1; flex-wrap: wrap; align-items: baseline; gap: 6px; }

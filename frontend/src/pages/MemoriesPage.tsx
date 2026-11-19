@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { ArrowLeft, Brain, CheckSquare, Plus, Search, Square, Trash2, X } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api/client'
+import { Modal } from '../components/Modal'
 import {
   ConfirmClearMemoriesModal,
   MEMORY_CATEGORIES,
@@ -90,75 +91,148 @@ export function MemoriesPage() {
 
   async function saveNewMemory(event: FormEvent) {
     event.preventDefault()
-    if (!newText.trim()) return
-    setSaving(true); setError('')
+    const textToSave = newText.trim()
+    const catToSave = newCategory
+    if (!textToSave) return
+
+    // Immediately close modal and clear inputs: optimistic update ensures zero waiting time
+    setAdding(false)
+    setNewText('')
+    setNewCategory('preference')
+    setError('')
+
+    const tempId = `temp_${Date.now()}`
+    const optimisticMemory: Memory = {
+      memory_id: tempId,
+      text: textToSave,
+      category: catToSave,
+      status: 'active',
+      version: 1,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }
+
+    if (!categoryFilter || categoryFilter === catToSave) {
+      setMemories((current) => [optimisticMemory, ...current])
+      setTotal((value) => value + 1)
+    }
+    setToast('Memory saved.')
+
     try {
       const created = await api<Memory>('/api/v1/chat/memories', {
         method: 'POST',
-        body: JSON.stringify({ text: newText.trim(), category: newCategory }),
+        body: JSON.stringify({ text: textToSave, category: catToSave }),
       })
-      if (!categoryFilter || categoryFilter === created.category) {
-        setMemories((current) => [created, ...current])
-        setTotal((value) => value + 1)
-      }
-      setAdding(false); setNewText(''); setNewCategory('preference')
-      setToast('Memory saved.')
+      // Replace optimistic placeholder with authoritative server-generated record
+      setMemories((current) => current.map((item) => (item.memory_id === tempId ? created : item)))
     } catch (err) {
+      // Revert optimistic addition if failed
+      setMemories((current) => current.filter((item) => item.memory_id !== tempId))
+      setTotal((value) => Math.max(0, value - 1))
       setError(err instanceof Error ? err.message : 'Could not save this memory.')
-    } finally {
-      setSaving(false)
     }
   }
 
   async function saveEdit(event: FormEvent) {
     event.preventDefault()
     if (!editing || !editText.trim()) return
-    setSaving(true); setError('')
+
+    const targetId = editing.memory_id
+    const originalMemory = editing
+    const updatedText = editText.trim()
+    const updatedCategory = editCategory
+
+    // Immediately close modal: optimistic update ensures user never waits
+    setEditing(null)
+    setError('')
+
+    const optimisticUpdated: Memory = {
+      ...originalMemory,
+      text: updatedText,
+      category: updatedCategory,
+      updated_at: new Date().toISOString(),
+    }
+
+    setMemories((current) =>
+      current.map((item) => (item.memory_id === targetId ? optimisticUpdated : item))
+    )
+    setToast('Memory updated.')
+
     try {
-      const updated = await api<Memory>(`/api/v1/chat/memories/${encodeURIComponent(editing.memory_id)}`, {
+      const updated = await api<Memory>(`/api/v1/chat/memories/${encodeURIComponent(targetId)}`, {
         method: 'PATCH',
-        body: JSON.stringify({ text: editText.trim(), category: editCategory, expected_version: editing.version }),
+        body: JSON.stringify({
+          text: updatedText,
+          category: updatedCategory,
+          expected_version: originalMemory.version,
+        }),
       })
-      setMemories((current) => current.map((item) => (item.memory_id === editing.memory_id ? { ...item, ...updated } : item)))
-      setEditing(null)
-      setToast('Memory updated.')
+      setMemories((current) =>
+        current.map((item) => (item.memory_id === targetId ? { ...item, ...updated } : item))
+      )
     } catch (err) {
+      // Rollback to original memory
+      setMemories((current) =>
+        current.map((item) => (item.memory_id === targetId ? originalMemory : item))
+      )
       setError(err instanceof Error ? err.message : 'Could not update this memory.')
-    } finally {
-      setSaving(false)
     }
   }
 
   async function confirmSingleDelete() {
     if (!deleteTarget) return
-    const id = deleteTarget.memory_id
+    const target = deleteTarget
+    const id = target.memory_id
+    const prevMemories = memories
+    const prevSelected = selectedIds
+
+    // Immediately close modal and update state optimistically
+    setDeleteTarget(null)
+    setMemories((current) => current.filter((item) => item.memory_id !== id))
+    setSelectedIds((current) => current.filter((item) => item !== id))
+    setTotal((value) => Math.max(0, value - 1))
+    setToast('Memory deleted.')
+
     try {
       await api(`/api/v1/chat/memories/${encodeURIComponent(id)}`, { method: 'DELETE' })
-      setMemories((current) => current.filter((item) => item.memory_id !== id))
-      setSelectedIds((current) => current.filter((item) => item !== id))
-      setTotal((value) => Math.max(0, value - 1))
-      setToast('Memory deleted.')
     } catch (err) {
+      // Rollback
+      setMemories(prevMemories)
+      setSelectedIds(prevSelected)
+      setTotal((value) => value + 1)
       setError(err instanceof Error ? err.message : 'Could not delete this memory.')
-    } finally {
-      setDeleteTarget(null)
     }
   }
 
   async function removeSelected() {
     if (!selectedIds.length) return
-    setBulkDeleting(true); setError('')
+    const idsToDelete = [...selectedIds]
+    const count = idsToDelete.length
+    const idSet = new Set(idsToDelete)
+    const prevMemories = memories
+    const prevSelected = selectedIds
+
+    // Immediately close modal and remove optimistically
+    setConfirmBulkDelete(false)
+    setMemories((current) => current.filter((item) => !idSet.has(item.memory_id)))
+    setSelectedIds([])
+    setTotal((value) => Math.max(0, value - count))
+    setToast(`Deleted ${count} selected memor${count === 1 ? 'y' : 'ies'}.`)
+    setBulkDeleting(true)
+    setError('')
+
     try {
       const res = await api<{ deleted_count: number; deleted_ids: string[] }>('/api/v1/chat/memories/bulk-delete', {
         method: 'POST',
-        body: JSON.stringify({ memory_ids: selectedIds }),
+        body: JSON.stringify({ memory_ids: idsToDelete }),
       })
       const removedSet = new Set(res.deleted_ids)
       setMemories((current) => current.filter((item) => !removedSet.has(item.memory_id)))
-      setTotal((value) => Math.max(0, value - res.deleted_count))
-      setSelectedIds([])
-      setToast(`Deleted ${res.deleted_count} selected memor${res.deleted_count === 1 ? 'y' : 'ies'}.`)
     } catch (err) {
+      // Rollback
+      setMemories(prevMemories)
+      setSelectedIds(prevSelected)
+      setTotal((value) => value + count)
       setError(err instanceof Error ? err.message : 'Could not delete selected memories.')
     } finally {
       setBulkDeleting(false)
@@ -238,15 +312,31 @@ export function MemoriesPage() {
 
         {memories.length > 0 && (
           <div className="memory-bulk-bar">
-            <button type="button" className="text-link muted-link" onClick={toggleSelectAll}>
-              {allSelected ? <CheckSquare size={14} /> : <Square size={14} />}
-              {allSelected ? 'Deselect all' : 'Select all'}
+            <button
+              type="button"
+              className={`memory-select-all-btn ${allSelected ? 'active' : ''}`}
+              onClick={toggleSelectAll}
+              aria-label={allSelected ? 'Deselect all memories' : 'Select all memories'}
+            >
+              {allSelected ? <CheckSquare size={15} color="#2563eb" /> : <Square size={15} />}
+              <span>{allSelected ? 'Deselect all' : 'Select all'}</span>
             </button>
-            {selectedIds.length > 0 && (
-              <button type="button" className="secondary-button compact-button danger-text" disabled={bulkDeleting} onClick={() => setConfirmBulkDelete(true)}>
+            <div className="memory-bulk-actions">
+              <button
+                type="button"
+                className="secondary-button compact-button danger-text"
+                style={{
+                  opacity: selectedIds.length > 0 ? 1 : 0,
+                  pointerEvents: selectedIds.length > 0 ? 'auto' : 'none',
+                  transform: selectedIds.length > 0 ? 'scale(1)' : 'scale(0.96)',
+                  transition: 'opacity 0.15s ease, transform 0.15s ease',
+                }}
+                disabled={bulkDeleting || selectedIds.length === 0}
+                onClick={() => setConfirmBulkDelete(true)}
+              >
                 <Trash2 size={13} /> {bulkDeleting ? 'Deleting…' : `Delete selected (${selectedIds.length})`}
               </button>
-            )}
+            </div>
           </div>
         )}
 
@@ -315,29 +405,51 @@ export function MemoriesPage() {
       )}
 
       {deleteTarget && (
-        <div className="modal-overlay" onClick={() => setDeleteTarget(null)}>
-          <div className="modal-card confirm-modal" onClick={(e) => e.stopPropagation()}>
-            <h3>Delete memory?</h3>
-            <p>This will permanently remove "<strong>{deleteTarget.text}</strong>" from your saved profile.</p>
+        <Modal title="Delete memory?" onClose={() => setDeleteTarget(null)}>
+          <div className="stack-form">
+            <p className="help-copy">
+              This will permanently remove &ldquo;<strong>{deleteTarget.text}</strong>&rdquo; from your saved profile and memory search index.
+            </p>
             <div className="modal-actions">
-              <button type="button" className="secondary-button" onClick={() => setDeleteTarget(null)}>Cancel</button>
-              <button type="button" className="danger-button" onClick={() => void confirmSingleDelete()}>Delete</button>
+              <button type="button" className="secondary-button" onClick={() => setDeleteTarget(null)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="primary-button danger-button"
+                onClick={() => void confirmSingleDelete()}
+              >
+                Delete
+              </button>
             </div>
           </div>
-        </div>
+        </Modal>
       )}
 
       {confirmBulkDelete && (
-        <div className="modal-overlay" onClick={() => setConfirmBulkDelete(false)}>
-          <div className="modal-card confirm-modal" onClick={(e) => e.stopPropagation()}>
-            <h3>Delete {selectedIds.length} memories?</h3>
-            <p>This will permanently delete the {selectedIds.length} selected memories from your profile.</p>
+        <Modal
+          title={`Delete ${selectedIds.length} memor${selectedIds.length === 1 ? 'y' : 'ies'}?`}
+          onClose={() => setConfirmBulkDelete(false)}
+        >
+          <div className="stack-form">
+            <p className="help-copy">
+              This will permanently delete the {selectedIds.length} selected memor{selectedIds.length === 1 ? 'y' : 'ies'} from your profile and semantic search index.
+            </p>
             <div className="modal-actions">
-              <button type="button" className="secondary-button" onClick={() => setConfirmBulkDelete(false)}>Cancel</button>
-              <button type="button" className="danger-button" disabled={bulkDeleting} onClick={() => { setConfirmBulkDelete(false); void removeSelected() }}>{bulkDeleting ? 'Deleting…' : 'Delete'}</button>
+              <button type="button" className="secondary-button" onClick={() => setConfirmBulkDelete(false)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="primary-button danger-button"
+                disabled={bulkDeleting}
+                onClick={() => void removeSelected()}
+              >
+                {bulkDeleting ? 'Deleting…' : 'Delete selected'}
+              </button>
             </div>
           </div>
-        </div>
+        </Modal>
       )}
 
       {confirmClearAll && (
