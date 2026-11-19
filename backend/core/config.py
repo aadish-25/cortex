@@ -60,6 +60,21 @@ class Settings(BaseSettings):
     OPENROUTER_DEFAULT_MODEL: str = "openrouter/nvidia/nemotron-3.5-lightning:free"
     GEMINI_DEFAULT_MODEL: str = "gemini/gemini-3-flash-preview"
 
+    # Multi-Model Cascade Lists per Provider
+    GROQ_MODELS: list[str] = [
+        "groq/qwen/qwen3.8-27b",
+        "groq/openai/gpt-oss-120b",
+    ]
+    OPENROUTER_FREE_MODELS: list[str] = [
+        "openrouter/nvidia/nemotron-3.5-lightning:free",
+        "openrouter/particle-ai/particle-1:free",
+        "openrouter/inclusionai/ling-3.2-flash:free",
+    ]
+    GEMINI_MODELS: list[str] = [
+        "gemini/gemini-3-flash-preview",
+        "gemini/gemini-flash-latest",
+    ]
+
     # LLM Gateway & Active Provider Configuration
     DEFAULT_LLM_PROVIDER: str = "groq"
     DEFAULT_LLM_MODEL: str = "groq/qwen/qwen3.8-27b"
@@ -71,9 +86,12 @@ class Settings(BaseSettings):
         "groq/qwen/qwen3.8-27b",
         "groq/openai/gpt-oss-120b",
         "openrouter/nvidia/nemotron-3.5-lightning:free",
+        "openrouter/particle-ai/particle-1:free",
+        "openrouter/inclusionai/ling-3.2-flash:free",
         "openrouter/deepseek/deepseek-chat",
         "openrouter/anthropic/claude-3.5-sonnet",
         "gemini/gemini-3-flash-preview",
+        "gemini/gemini-flash-latest",
         "gemini/gemini-2.5-flash",
         "gemini/gemini-1.5-pro",
         "claude-3-7-sonnet-20250219",
