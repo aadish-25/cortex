@@ -47,6 +47,13 @@ class Settings(BaseSettings):
     GOOGLE_DRIVE_API_KEY: str = ""
     GOOGLE_DRIVE_ROOT_FOLDER_ID: str = ""
 
+    # Cloudinary Cloud Storage Integration
+    CLOUDINARY_CLOUD_NAME: str = ""
+    CLOUDINARY_API_KEY: str = ""
+    CLOUDINARY_API_SECRET: str = ""
+    CLOUDINARY_URL: str = ""
+    CLOUDINARY_ROOT_FOLDER: str = "cortex"
+
     # Provider Default Models
     GROQ_DEFAULT_MODEL: str = "groq/qwen/qwen3.8-27b"
     OPENROUTER_DEFAULT_MODEL: str = "openrouter/nvidia/nemotron-3.5-lightning:free"

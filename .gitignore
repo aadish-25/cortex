@@ -39,5 +39,5 @@ Thumbs.db
 .idea/
 
 # Original uploaded documents (local development storage)
-storage/documents/*
-!storage/documents/.gitkeep
+/storage/
+!/storage/**/.gitkeep

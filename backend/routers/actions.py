@@ -1,7 +1,8 @@
 import logging
 import uuid
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from pathlib import Path
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -190,3 +191,55 @@ async def discard_action_draft(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
     except ActionError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
+class AttachmentUploadResponse(BaseModel):
+    url: str
+    filename: str
+    size_bytes: int
+    storage_type: str
+
+
+ALLOWED_ATTACHMENT_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".pdf"}
+MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024  # 10 MB
+
+
+@router.post("/attachments", response_model=AttachmentUploadResponse, status_code=status.HTTP_201_CREATED)
+async def upload_action_attachment(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Uploads an image or document receipt attached to a Jira ticket draft.
+    Files are stored under cortex/jira_tickets/<username>-<YYYYMMDD-HHMMSS>.<ext>
+    Cloudinary functions/tools are internal backend infrastructure and not exposed to the agent.
+    """
+    filename = file.filename or "receipt.png"
+    ext = Path(filename).suffix.lower()
+    if ext not in ALLOWED_ATTACHMENT_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported file type '{ext}'. Allowed: {sorted(ALLOWED_ATTACHMENT_EXTENSIONS)}",
+        )
+
+    content = await file.read(MAX_ATTACHMENT_BYTES + 1)
+    if not content:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty.")
+    if len(content) > MAX_ATTACHMENT_BYTES:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Attachment exceeds 10 MB limit.")
+
+    from backend.services.storage.cloudinary_service import cloudinary_service
+
+    result = cloudinary_service.upload_jira_attachment(
+        file_bytes=content,
+        username=current_user.username,
+        original_filename=filename,
+    )
+
+    return AttachmentUploadResponse(
+        url=result["url"],
+        filename=result["filename"],
+        size_bytes=result["size_bytes"],
+        storage_type=result["storage_type"],
+    )
+

@@ -31,17 +31,23 @@ def compute_file_hash(content: bytes) -> str:
 
 
 def persist_document_file(document_id: uuid.UUID, filename: str, content: bytes) -> str:
-    """Persist original bytes under a generated filename (never trust upload paths)."""
-    extension = Path(filename).suffix.lower()
-    if extension not in {".md", ".docx", ".pdf", ".txt"}:
-        extension = ".bin"
-    storage_dir = BASE_DIR / "storage" / "documents"
-    storage_dir.mkdir(parents=True, exist_ok=True)
-    destination = storage_dir / f"{document_id}{extension}"
-    temporary = destination.with_suffix(destination.suffix + ".tmp")
-    temporary.write_bytes(content)
-    os.replace(temporary, destination)
-    return str(destination)
+    """Persist original bytes under Cloudinary or local storage (never trust upload paths)."""
+    try:
+        from backend.services.storage.cloudinary_service import cloudinary_service
+        res = cloudinary_service.upload_document(content, document_id, filename)
+        return res.get("url") or res.get("storage_path") or ""
+    except Exception as exc:
+        logger.warning("Cloud storage upload failed (%s); using local disk fallback.", exc)
+        extension = Path(filename).suffix.lower()
+        if extension not in {".md", ".docx", ".pdf", ".txt"}:
+            extension = ".bin"
+        storage_dir = BASE_DIR / "storage" / "documents"
+        storage_dir.mkdir(parents=True, exist_ok=True)
+        destination = storage_dir / f"{document_id}{extension}"
+        temporary = destination.with_suffix(destination.suffix + ".tmp")
+        temporary.write_bytes(content)
+        os.replace(temporary, destination)
+        return str(destination)
 
 
 async def record_document_processing_log(
