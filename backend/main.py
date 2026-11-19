@@ -42,9 +42,18 @@ app = FastAPI(
 
 # CORS configuration for Vite React frontend
 allowed_origins = [origin.strip() for origin in settings.FRONTEND_ORIGINS.split(",") if origin.strip()]
+
+# In development/test environments, automatically permit local network origins (e.g. 192.168.x.x, 10.x.x.x, localhost)
+dev_origin_regex = (
+    r"^https?://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?$"
+    if settings.ENVIRONMENT.lower() in {"development", "dev", "test"}
+    else None
+)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
+    allow_origin_regex=dev_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
