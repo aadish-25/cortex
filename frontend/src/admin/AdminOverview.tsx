@@ -22,16 +22,23 @@ function buildWeeklyChartData(dailyCounts: Array<{ day: string; query_count: num
   const result: Array<{ day: string; label: string; count: number; isToday: boolean }> = []
   const today = new Date()
 
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date()
-    d.setDate(today.getDate() - i)
+  // Always start week from Monday (Sunday is 0, Monday is 1, ..., Saturday is 6)
+  const currentDay = today.getDay()
+  const diffToMonday = currentDay === 0 ? -6 : 1 - currentDay
+  const monday = new Date(today)
+  monday.setDate(today.getDate() + diffToMonday)
+
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(monday)
+    d.setDate(monday.getDate() + i)
     const yyyy = d.getFullYear()
     const mm = String(d.getMonth() + 1).padStart(2, '0')
     const dd = String(d.getDate()).padStart(2, '0')
     const key = `${yyyy}-${mm}-${dd}`
     const count = countMap.get(key) || 0
     const label = d.toLocaleDateString(undefined, { weekday: 'short' })
-    result.push({ day: key, label, count, isToday: i === 0 })
+    const isToday = d.toDateString() === today.toDateString()
+    result.push({ day: key, label, count, isToday })
   }
   return result
 }
@@ -56,7 +63,7 @@ export function AdminOverview() {
     await Promise.all([
       handle(api<AdminHealth>('/api/v1/admin/health'), (v) => { _cache.health = v; setHealth(v) }),
       handle(api<Quality>('/api/v1/admin/analytics/quality?days=7'), (v) => { _cache.quality = v; setQuality(v) }),
-      handle(api<QueryStats>('/api/v1/admin/analytics/queries?days=7'), (v) => { _cache.queries = v; setQueries(v) }),
+      handle(api<QueryStats>('/api/v1/admin/analytics/queries?days=14'), (v) => { _cache.queries = v; setQueries(v) }),
       handle(api<Feedback>('/api/v1/admin/analytics/feedback?days=7'), (v) => { _cache.feedback = v; setFeedback(v) }),
       handle(api<Tokens>('/api/v1/admin/analytics/tokens?days=7'), (v) => { _cache.tokens = v; setTokens(v) }),
     ])
@@ -105,7 +112,7 @@ export function AdminOverview() {
       <section className="panel query-panel">
         <div className="panel-heading">
           <div><p className="eyebrow">ACTIVITY</p><h2>Query volume</h2></div>
-          <span className="panel-period">Last 7 days</span>
+          <span className="panel-period">This week</span>
         </div>
         <div className="bar-chart-container">
           <div className="bar-chart-grid">
