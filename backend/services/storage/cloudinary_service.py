@@ -36,6 +36,11 @@ class CloudinaryService:
         self._init_client()
 
     def _init_client(self) -> None:
+        if not getattr(settings, "ENABLE_CLOUDINARY_STORAGE", False):
+            logger.info("Cloudinary storage is paused (ENABLE_CLOUDINARY_STORAGE=False); using local docker volume / disk storage.")
+            self._is_configured = False
+            return
+
         has_url = bool(settings.CLOUDINARY_URL and settings.CLOUDINARY_URL.strip())
         has_credentials = bool(
             settings.CLOUDINARY_CLOUD_NAME

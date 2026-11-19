@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     GOOGLE_DRIVE_ROOT_FOLDER_ID: str = ""
 
     # Cloudinary Cloud Storage Integration
+    ENABLE_CLOUDINARY_STORAGE: bool = False
     CLOUDINARY_CLOUD_NAME: str = ""
     CLOUDINARY_API_KEY: str = ""
     CLOUDINARY_API_SECRET: str = ""
