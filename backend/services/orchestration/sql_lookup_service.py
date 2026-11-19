@@ -221,7 +221,7 @@ def get_user_profile(user: User) -> Dict[str, Any]:
 async def classify_sql_lookup_intent(query: str) -> Tuple[SQLLookupIntent, Dict[str, Any]]:
     """
     Classifies a structured lookup query into a safe, bounded handler using the fast LLM router.
-    Gracefully handles typos, conversational slang, and complex phrasing (e.g. 'show my tiiicket').
+    Gracefully handles conversational slang, complex phrasing, and typos.
     Extracts relevant parameters (e.g. ticket UUID, department name).
     """
     # Fast regex extraction for exact UUID if present in text
@@ -231,14 +231,15 @@ async def classify_sql_lookup_intent(query: str) -> Tuple[SQLLookupIntent, Dict[
     # Use Fast LLM Routing Model for robust semantic classification
     system_prompt = (
         "You are Cortex's SQL Lookup Intent Classifier. "
+        "Understand user intent robustly across English, colloquial terms, and typos. "
         "Classify the user's operational query into exactly one of these intents:\n"
-        "- MY_TICKETS: User asking to view, list, or check their own tickets or issues (handles typos like 'tiiickets', 'my ticets', 'open bugs').\n"
+        "- MY_TICKETS: User asking to view, list, or check their own workplace tickets, service requests, or reported issues.\n"
         "- TICKET_STATUS: User querying the specific status, progress, or state of a specific ticket or UUID.\n"
-        "- LEAVE_BALANCE: User asking to check their own personal leave balance, remaining vacation days, sick leaves, casual leaves, time off (e.g., 'how many leaves left', 'my sick leave balance'). NOTE: General policy rules questions (e.g. 'can employees carry forward leaves') belong to UNKNOWN.\n"
-        "- DEPARTMENT_HEAD: User asking who leads, manages, directs, or heads a department, or requesting department manager contact details (e.g., 'head of engineering', 'who runs hr', 'finance lead', 'HR manager contact details').\n"
-        "- USER_PROFILE: User asking about their own identity, role, department, clearance, or profile (e.g., 'who am i', 'what is my department').\n"
+        "- LEAVE_BALANCE: User asking to check their own personal leave balance, remaining vacation days, sick leaves, casual leaves, or time off. (General policy rule questions belong to UNKNOWN).\n"
+        "- DEPARTMENT_HEAD: User asking who leads, manages, directs, or heads a department, or requesting department manager contact details.\n"
+        "- USER_PROFILE: User asking about their own identity, role, department, clearance, or profile.\n"
         "- UNKNOWN: None of the above.\n\n"
-        "Extract ticket_id if present (or null), and department if asked (e.g. 'Engineering', 'HR', 'Finance')."
+        "Extract ticket_id if present (or null), and department if asked."
     )
 
     try:
