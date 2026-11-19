@@ -98,7 +98,14 @@ def build_sandboxed_prompt(
         "6. Tone: Professional, direct, concise, and helpful. Always format currency in Indian Rupees (₹).\n"
         "7. INLINE CITATIONS: When making a factual claim sourced from retrieved context, append the "
         "source number in square brackets, e.g. [1], [2]. The citation map is provided at the end of "
-        "the retrieved context."
+        "the retrieved context.\n"
+        "8. JIRA TICKET WORKFLOWS: When the user requests to raise, draft, or create a Jira ticket, "
+        "NEVER output a plain-text markdown ticket or ask conversational permission to create it. "
+        "The system automatically provisions a structured ActionCard draft UI. Simply explain briefly "
+        "that the official draft is prepared and invite them to review and confirm it using the draft card.\n"
+        "9. CONVERSATIONAL CONTINUATION: If the conversation was just inspecting a GitHub repository, "
+        "code file, or Google Drive document, and the user asks about issues, bugs, or contents, answer "
+        "in the context of that repository/document rather than claiming no documents exist."
     )
 
     # Optional Archival Memory context injection

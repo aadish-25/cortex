@@ -681,9 +681,14 @@ export function ChatPage() {
   }, [])
 
   useEffect(() => {
-    if (isStreaming || (conversationId && messages.length > 0 && messages[0].conversation_id === conversationId)) {
+    // Prevent flicker: if messages already exist for this active conversation (e.g. freshly streamed first turn),
+    // retain them smoothly in memory while loadMessages syncs in the background.
+    if (conversationId && messages.length > 0 && messages.some((m) => m.conversation_id === conversationId || !m.conversation_id)) {
+      setMessages((current) => current.map((m) => (m.conversation_id ? m : { ...m, conversation_id: conversationId })))
+      void loadMessages(conversationId, 1)
       return
     }
+
     abortRef.current?.abort()
     setIsStreaming(false)
     setInput('')
@@ -740,10 +745,14 @@ export function ChatPage() {
       void signOut().finally(() => navigate('/login', { replace: true }))
     } else if (event.type === 'done') {
       const doneId = event.data?.message_id || assistantId
+      const newConvId = event.data?.conversation_id
+      if (newConvId) {
+        setMessages((current) => current.map((m) => (m.conversation_id ? m : { ...m, conversation_id: newConvId })))
+      }
       patchMessage(assistantId, { id: doneId, streaming: false })
       setIsStreaming(false)
-      if (event.data?.conversation_id && !conversationId) navigate(`/chat/${event.data.conversation_id}`, { replace: true })
-      if (event.data?.conversation_id) void loadMessages(event.data.conversation_id, 1)
+      if (newConvId && !conversationId) navigate(`/chat/${newConvId}`, { replace: true })
+      if (newConvId) void loadMessages(newConvId, 1)
     }
   }
 
@@ -878,7 +887,7 @@ export function ChatPage() {
   }
 
   const grouped = useMemo(() => groupMessages(messages), [messages])
-  const isEmpty = messages.length === 0
+  const isEmpty = !conversationId && messages.length === 0 && !isStreaming
   const firstName = user?.name.split(' ')[0] || 'there'
 
   return <div className="chat-page">

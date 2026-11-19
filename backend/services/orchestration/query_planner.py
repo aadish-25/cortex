@@ -20,6 +20,8 @@ PLANNER_HISTORY_TOKEN_BUDGET = 3000
 ANAPHORA_PATTERN = re.compile(
     r"\b(it|its|they|them|their|those|these|this|that|he|she|his|her)\b|"
     r"\b(what about|how about|can i claim that|the policy|the rule|the same|same for|as mentioned|above|previous|open it|add to memor|remember)\b|"
+    r"\b(are there|any (?:issues|bugs|vulnerabilities|security|prs|pull requests|commits|errors|warnings|files)|show me|tell me more|explain (?:this|the code)|who (?:wrote|committed)|what does (?:this|it) do)\b|"
+    r"\b(rais|raise|create|file|submit|log)\s+(it|this|that|the ticket|jira)\b|"
     r"\.\.\.$",
     re.IGNORECASE,
 )
@@ -227,10 +229,10 @@ async def rewrite_query(
 
     return query, False
 
-    return query, False
-
-
-def classify_task_intent(query_text: Optional[str] = None) -> PlanTaskType:
+def classify_task_intent(
+    query_text: Optional[str] = None,
+    history: Optional[List[ChatMessage]] = None,
+) -> PlanTaskType:
     """Classifies task intent using enterprise heuristics (Offline Fallback)."""
     if not query_text or not isinstance(query_text, str):
         return PlanTaskType.INTERNAL_RAG
@@ -245,19 +247,46 @@ def classify_task_intent(query_text: Optional[str] = None) -> PlanTaskType:
         return PlanTaskType.DIRECT_CHAT
     if any(k in q_lower for k in ["leave balance", "my tickets", "ticket status", "department head", "manager for"]):
         return PlanTaskType.STRUCTURED_LOOKUP
-    elif any(k in q_lower for k in ["draft", "raise ticket", "create ticket", "file complaint", "apply for leave", "submit dispute"]):
+
+    # ACTION_WORKFLOW: Raising workplace Jira tickets, claims, disputes, or leave requests
+    # Handles common typos like 'rais', 'creat', 'submti', 'ticket', 'jira'
+    if re.search(
+        r"\b(rais|raise|create|open|file|log|draft|submit|apply|make)\b.*?\b(ticket|jira|workflow|reimbursement|expense|leave|dispute|complaint|requisition)\b|"
+        r"\b(jira\s*ticket|jira\s*draft|raise\s*it|create\s*it|submit\s*it|file\s*it|rais\s*it)\b",
+        q_lower,
+    ):
         return PlanTaskType.ACTION_WORKFLOW
-    elif any(k in q_lower for k in ["github", "pull request", "repo", "pr #", "git commit", "codebase", "branch"]):
+
+    # Explicit GitHub keywords
+    if any(k in q_lower for k in ["github", "pull request", "repo", "pr #", "git commit", "codebase", "branch"]):
         return PlanTaskType.GITHUB_SEARCH
-    elif any(k in q_lower for k in ["google drive", "shared drive", "gdoc", "drive file", "google doc", "my drive", "in drive"]) or re.search(r"\.(docx|pdf|png|jpg|jpeg|gdoc)\b", q_lower):
+
+    # Explicit Google Drive keywords
+    if any(k in q_lower for k in ["google drive", "shared drive", "gdoc", "drive file", "google doc", "my drive", "in drive"]) or re.search(r"\.(docx|pdf|png|jpg|jpeg|gdoc)\b", q_lower):
         return PlanTaskType.DRIVE_SEARCH
-    elif any(k in q_lower for k in ["external", "market price", "latest 2026", "web search", "google", "flight benchmark", "news"]):
+
+    # Contextual continuity: If previous turn discussed GitHub or Drive, continuation questions belong to that tool!
+    if history:
+        recent_text = " ".join(m.content.lower() for m in history[-3:])
+        # If GitHub was discussed recently
+        if any(gk in recent_text for gk in ["github", "repo", "repository", "cortex-testing", ".py", ".ts", ".js", "pull request", "commit"]):
+            if any(qk in q_lower for qk in ["security", "issue", "vulnerability", "vulnerabilities", "bug", "code", "inspect", "file", "pr", "commit"]):
+                return PlanTaskType.GITHUB_SEARCH
+        # If Google Drive was discussed recently
+        if any(dk in recent_text for dk in ["google drive", "drive", "gdoc", "folder"]):
+            if any(qk in q_lower for qk in ["file", "document", "read", "open", "folder", "list"]):
+                return PlanTaskType.DRIVE_SEARCH
+
+    if any(k in q_lower for k in ["external", "market price", "latest 2026", "web search", "google", "flight benchmark", "news"]):
         return PlanTaskType.EXTERNAL_WEB
 
     return PlanTaskType.INTERNAL_RAG
 
 
-def decompose_compound_query_heuristic(query: Optional[str] = None) -> List[PlanTask]:
+def decompose_compound_query_heuristic(
+    query: Optional[str] = None,
+    history: Optional[List[ChatMessage]] = None,
+) -> List[PlanTask]:
     """
     Rule-based decomposition for compound prompts (Decision D24 Offline Fallback).
     Detects conjunctions, commas, semicolons, vertical bars, plus signs, slashes.
@@ -272,14 +301,14 @@ def decompose_compound_query_heuristic(query: Optional[str] = None) -> List[Plan
     parts = [p.strip() for p in SPLIT_CONJUNCTIONS_PATTERN.split(cleaned_query) if p.strip()]
 
     if len(parts) <= 1:
-        task_type = classify_task_intent(cleaned_query)
+        task_type = classify_task_intent(cleaned_query, history=history)
         return [PlanTask(id=1, type=task_type, query=cleaned_query, depends_on=[])]
 
     tasks: List[PlanTask] = []
     lookup_and_rag_ids = []
 
     for idx, part in enumerate(parts, start=1):
-        task_type = classify_task_intent(part)
+        task_type = classify_task_intent(part, history=history)
 
         if task_type == PlanTaskType.ACTION_WORKFLOW and lookup_and_rag_ids:
             tasks.append(
@@ -341,15 +370,19 @@ async def plan_and_decompose_query(
             "- INTERNAL_RAG: Company policies, handbooks, SOPs, compliance docs. Normalize `query` into a clean, spell-corrected search phrase.\n"
             "- EXTERNAL_WEB: Public internet data (market rates, news, external benchmarks).\n"
             "- STRUCTURED_LOOKUP: User's own SQL records (leave balance, their Jira tickets, department heads, profile).\n"
-            "- ACTION_WORKFLOW: Raising formal workplace Jira tickets/requests (IT, HR, Finance) ONLY — never for saving user memories/personalization.\n"
+            "- ACTION_WORKFLOW: Raising formal workplace Jira tickets/requests (IT, HR, Finance). "
+            "CRITICAL: If the user asks to raise, create, file, log, or draft a Jira ticket (e.g. 'rais jira ticket', 'raise ticket', 'create ticket for this', 'file ticket'), "
+            "ALWAYS plan an ACTION_WORKFLOW task directly so the structured ActionCard UI draft is generated on the first turn. DO NOT plan an informational chat response asking if they want a ticket.\n"
             "- GITHUB_SEARCH: Repository code, issues, PRs, or opening a repo file. Set `tool_action` to `github_list_issues`, `github_issues_with_files`, `github_list_prs`, `github_search_code`, or `github_read_file` (with file path in `query`).\n"
             "- DRIVE_SEARCH: Google Drive files. Set `tool_action` to `drive_list` (`query=\"\"`), `drive_search`, or `drive_read_file` (exact file name/keyword in `query`).\n"
             "- ADMIN_OPERATION (Admin role only): `admin_health`, `admin_audit_logs`, `admin_doc_status`, or `admin_reindex`.\n"
             "- DIRECT_CHAT: Greetings, general conversation, assistant capability questions, or personal advice/questions not requiring enterprise tools.\n\n"
             f"Authenticated role: {user_role or 'Unknown'}.\n"
             "Principles:\n"
-            "1. Context-first tool selection: Never hard-assume a file request belongs to Drive — use Recent Conversation Context and cues to pick Drive vs GitHub vs INTERNAL_RAG.\n"
-            "2. Decompose multi-intent prompts into minimal tasks with `depends_on` only where an action requires upstream output.\n\n"
+            "1. Contextual continuity: When the conversation was just discussing a GitHub repository or code file, follow-up questions about 'security issues', 'vulnerabilities', 'bugs', 'functions', 'code', or 'PRs' belong to GITHUB_SEARCH for that repository/file — NOT INTERNAL_RAG!\n"
+            "2. When the conversation was just searching or reading a Google Drive document, follow-up questions about that document belong to DRIVE_SEARCH — NOT INTERNAL_RAG!\n"
+            "3. Action immediacy: If the user says 'rais jira ticket' or 'raise ticket' about an issue or request just discussed, plan ACTION_WORKFLOW directly.\n"
+            "4. Decompose multi-intent prompts into minimal tasks with `depends_on` only where an action requires upstream output.\n\n"
         )
         prompt = f"{planner_instructions}{history_section}User Prompt: {active_query}\n"
 
@@ -415,7 +448,7 @@ async def plan_and_decompose_query(
                 was_rewritten=was_rewritten,
             )
 
-    tasks = decompose_compound_query_heuristic(active_query)
+    tasks = decompose_compound_query_heuristic(active_query, history=history)
     return ExecutionPlan(
         tasks=tasks,
         original_query=query,
