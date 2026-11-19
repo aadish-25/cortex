@@ -55,6 +55,10 @@ def parse_text(content: bytes) -> List[ParsedSection]:
         if sec_text:
             sections.append(ParsedSection(text=sec_text, section=current_section, page_number=None))
 
+    if not sections and text.strip():
+        # Fallback if markdown contains only header lines without trailing paragraph text
+        sections.append(ParsedSection(text=text.strip(), section=current_section, page_number=None))
+
     return sections
 
 
@@ -85,6 +89,10 @@ def parse_markdown(content: bytes) -> List[ParsedSection]:
         sec_text = "\n".join(current_lines).strip()
         if sec_text:
             sections.append(ParsedSection(text=sec_text, section=current_section, page_number=None))
+
+    if not sections and text.strip():
+        # Fallback if markdown contains only header lines without trailing paragraph text
+        sections.append(ParsedSection(text=text.strip(), section=current_section, page_number=None))
 
     return sections
 
