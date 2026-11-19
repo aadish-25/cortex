@@ -9,8 +9,30 @@ interface QueryStats { total_queries: number; daily_counts: Array<{ day: string;
 interface Feedback { thumbs_up: number; thumbs_down: number; total_feedback: number; satisfaction_percent: number | null }
 interface Tokens { grand_total_tokens: number; grand_total_cost_usd: number; by_provider_model: Array<{ provider: string; model: string; total_tokens: number; request_count: number }> }
 
-// True stale-while-revalidate module cache: renders instantly on every revisit while refreshing live data in the background.
-const _cache: { health?: AdminHealth; quality?: Quality; queries?: QueryStats; feedback?: Feedback; tokens?: Tokens; loaded?: boolean } = {}
+const SESSION_CACHE_KEY = 'cortex_admin_overview_cache'
+
+function loadSavedCache(): {
+  health?: AdminHealth
+  quality?: Quality
+  queries?: QueryStats
+  feedback?: Feedback
+  tokens?: Tokens
+  loaded?: boolean
+} {
+  try {
+    const raw = sessionStorage.getItem(SESSION_CACHE_KEY)
+    return raw ? JSON.parse(raw) : {}
+  } catch {
+    return {}
+  }
+}
+
+// True stale-while-revalidate cache backed by sessionStorage: renders instantly on every revisit / refresh.
+const _cache = loadSavedCache()
+
+function saveCache() {
+  try { sessionStorage.setItem(SESSION_CACHE_KEY, JSON.stringify(_cache)) } catch {}
+}
 
 function buildWeeklyChartData(dailyCounts: Array<{ day: string; query_count: number }> = []) {
   const countMap = new Map<string, number>()
@@ -57,7 +79,13 @@ export function AdminOverview() {
     let failures = 0
     const handle = <T,>(promise: Promise<T>, apply: (val: T) => void) =>
       promise
-        .then((val) => { if (mountedRef.current) apply(val) })
+        .then((val) => {
+          if (mountedRef.current) {
+            apply(val)
+            saveCache()
+            setLoading(false)
+          }
+        })
         .catch(() => { failures += 1 })
 
     await Promise.all([
@@ -70,6 +98,7 @@ export function AdminOverview() {
 
     if (!mountedRef.current) return
     _cache.loaded = true
+    saveCache()
     setLoading(false)
     if (failures === 5) setError('Could not load admin telemetry. Check that the backend services are running.')
     else setError('')
@@ -78,9 +107,17 @@ export function AdminOverview() {
   useEffect(() => {
     mountedRef.current = true
     void refreshAll()
-    const timer = setInterval(() => { void refreshAll() }, 30_000)
-    return () => { mountedRef.current = false; clearInterval(timer) }
   }, [refreshAll])
+
+  useEffect(() => {
+    // If any service is WAITING or CHECKING, poll every 3s so the UI automatically flips to UP
+    const hasWaiting = Object.values(health?.services ?? {}).some(
+      (s) => s.status === 'WAITING' || s.status === 'CHECKING'
+    )
+    const intervalMs = hasWaiting ? 3_000 : 30_000
+    const timer = setInterval(() => { void refreshAll() }, intervalMs)
+    return () => clearInterval(timer)
+  }, [refreshAll, health?.services])
 
   const metrics = [
     { label: 'Queries · 7 days', value: quality?.total_queries ?? queries?.total_queries ?? '—', note: 'Recorded chat turns', icon: MessageSquareText },
@@ -96,6 +133,7 @@ export function AdminOverview() {
   function serviceBadgeClass(svc: AdminHealth['services'][string]) {
     const s = svc.status.toLowerCase()
     if (s === 'up') return 'up'
+    if (s === 'waiting' || s === 'checking') return 'waiting'
     if (s === 'down') return 'down'
     return 'degraded'
   }

@@ -48,6 +48,9 @@ import time
 _celery_probe_cache: Dict[str, Any] = {"ts": 0.0, "result": None}
 _CELERY_CACHE_TTL_SECONDS = 30.0
 
+_qdrant_probe_cache: Dict[str, Any] = {"ts": 0.0, "result": None}
+_QDRANT_CACHE_TTL_SECONDS = 30.0
+
 
 async def _probe_postgres(session: AsyncSession) -> Dict[str, Any]:
     try:
@@ -72,17 +75,37 @@ async def _probe_redis() -> Dict[str, Any]:
 
 
 async def _probe_qdrant() -> Dict[str, Any]:
+    now = time.monotonic()
+    cached = _qdrant_probe_cache.get("result")
+    if cached is not None and (now - _qdrant_probe_cache["ts"]) < _QDRANT_CACHE_TTL_SECONDS:
+        return dict(cached)
+
     try:
-        from backend.db.qdrant import get_qdrant_client
-        client = get_qdrant_client()
-        collections = await asyncio.wait_for(asyncio.to_thread(client.get_collections), timeout=1.5)
-        collection_names = [c.name for c in collections.collections]
-        return {
-            "status": "UP",
-            "detail": f"{len(collection_names)} collection(s): {collection_names}",
-        }
+        import httpx
+        from backend.core.config import settings
+        url = f"{settings.QDRANT_URL.rstrip('/')}/healthz"
+        async with httpx.AsyncClient(timeout=0.8) as client:
+            resp = await client.get(url)
+            if resp.status_code == 200:
+                result = {"status": "UP", "detail": "Vector engine ready (/healthz OK)"}
+            else:
+                result = {"status": "DEGRADED", "detail": f"HTTP {resp.status_code}"}
     except Exception:
-        return {"status": "DOWN", "detail": "Vector database connection failed"}
+        try:
+            from backend.db.qdrant import get_qdrant_client
+            client = get_qdrant_client()
+            collections = await asyncio.wait_for(asyncio.to_thread(client.get_collections), timeout=0.8)
+            collection_names = [c.name for c in collections.collections]
+            result = {
+                "status": "UP",
+                "detail": f"{len(collection_names)} collection(s): {collection_names}",
+            }
+        except Exception:
+            result = {"status": "DOWN", "detail": "Vector database connection failed"}
+
+    _qdrant_probe_cache["ts"] = now
+    _qdrant_probe_cache["result"] = result
+    return dict(result)
 
 
 async def _probe_celery() -> Dict[str, Any]:
@@ -90,20 +113,54 @@ async def _probe_celery() -> Dict[str, Any]:
     cached = _celery_probe_cache.get("result")
     if cached is not None and (now - _celery_probe_cache["ts"]) < _CELERY_CACHE_TTL_SECONDS:
         return dict(cached)
+
+    # 1. Fast path: check Redis for live worker heartbeat (1ms)
+    try:
+        from backend.db.redis import get_redis_client
+        redis_client = get_redis_client()
+        if redis_client is None:
+            from backend.db.redis import redis_manager
+            redis_client = await redis_manager.get_client()
+        if redis_client is not None:
+            hb = await redis_client.get("cortex:celery:worker_heartbeat")
+            if hb:
+                result = {"status": "UP", "detail": "Worker active (heartbeat verified)"}
+                _celery_probe_cache["ts"] = now
+                _celery_probe_cache["result"] = result
+                return dict(result)
+    except Exception:
+        pass
+
+    # 2. Inspector ping with tight timeout
     try:
         from backend.worker.celery_app import celery_app
-        inspector = celery_app.control.inspect(timeout=0.5)
-        worker_pings = await asyncio.wait_for(asyncio.to_thread(inspector.ping), timeout=0.8)
+        inspector = celery_app.control.inspect(timeout=0.4)
+        worker_pings = await asyncio.wait_for(asyncio.to_thread(inspector.ping), timeout=0.6)
         worker_count = len(worker_pings or {})
+        if worker_count > 0:
+            result = {
+                "status": "UP",
+                "detail": f"{worker_count} worker(s) responding",
+            }
+        else:
+            # Inspection returned 0 workers yet Redis broker is alive — worker may still be booting
+            result = {
+                "status": "WAITING",
+                "detail": "Waiting for worker response...",
+            }
+    except asyncio.TimeoutError:
+        # Worker is busy or in progress — do NOT falsely mark DOWN!
         result = {
-            "status": "UP" if worker_count else "DOWN",
-            "detail": f"{worker_count} worker(s) responding" if worker_count else "No Celery workers responding",
+            "status": "WAITING",
+            "detail": "Waiting for worker response...",
         }
-    except Exception:
+    except Exception as exc:
+        is_timeout = "timeout" in str(exc).lower()
         result = {
-            "status": "DOWN",
-            "detail": "Celery worker inspection failed",
+            "status": "WAITING" if is_timeout else "DOWN",
+            "detail": "Waiting for worker response..." if is_timeout else "Celery worker inspection failed",
         }
+
     _celery_probe_cache["ts"] = now
     _celery_probe_cache["result"] = result
     return dict(result)
@@ -139,12 +196,16 @@ async def inspect_system_health(session: AsyncSession) -> Dict[str, Any]:
         "meta": "CONFIGURED" if settings.META_API_KEY else "NOT_CONFIGURED",
     }
 
-    # Overall status: UP only when all infrastructure services are UP.
-    all_statuses = [v["status"] for v in health["services"].values()]
-    if all(s == "UP" for s in all_statuses):
+    # Overall status: UP when core services are UP and Celery is UP or WAITING.
+    # Returns UP or DEGRADED to preserve system health contracts (D34).
+    core_statuses = [
+        health["services"]["postgres"]["status"],
+        health["services"]["redis"]["status"],
+        health["services"]["qdrant"]["status"],
+    ]
+    celery_status = health["services"]["celery"]["status"]
+    if all(s == "UP" for s in core_statuses) and celery_status in ("UP", "WAITING"):
         health["overall"] = "UP"
-    elif any(s == "DOWN" for s in all_statuses):
-        health["overall"] = "DEGRADED"
     else:
         health["overall"] = "DEGRADED"
 

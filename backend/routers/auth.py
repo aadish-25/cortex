@@ -4,10 +4,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.config import settings
 from backend.core.security import (
+    DEFAULT_ORGANIZATION_PASSWORD,
     DEFAULT_ORGANIZATION_PASSWORDS,
     get_current_user,
     hash_password,
     is_default_password,
+    is_default_password_async,
+    record_password_default_status,
     verify_password,
 )
 from backend.db.database import get_db
@@ -140,8 +143,11 @@ async def login(
         path="/",
     )
 
+    is_def = (payload.password == DEFAULT_ORGANIZATION_PASSWORD)
+    record_password_default_status(user.hashed_password, is_def)
+
     user_read = UserRead.model_validate(user)
-    user_read.must_change_password = is_default_password(user.hashed_password)
+    user_read.must_change_password = is_def
 
     return TokenResponse(
         access_token=token,
@@ -156,7 +162,7 @@ async def get_me(current_user: User = Depends(get_current_user)):
     Retrieve current authenticated user's profile information.
     """
     user_read = UserRead.model_validate(current_user)
-    user_read.must_change_password = is_default_password(current_user.hashed_password)
+    user_read.must_change_password = await is_default_password_async(current_user.hashed_password)
     return user_read
 
 
@@ -200,6 +206,7 @@ async def change_password(
         )
 
     current_user.hashed_password = hash_password(cleaned_new)
+    record_password_default_status(current_user.hashed_password, False)
     from datetime import datetime, timezone
     current_user.updated_at = datetime.now(timezone.utc)
     session.add(current_user)

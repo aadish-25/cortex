@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 import uuid
@@ -34,24 +35,51 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     )
 
 
-DEFAULT_ORGANIZATION_PASSWORDS = {
-    "Welcome@Cortex2026!",
-    "welcome@cortex26",
-    "Welcome@Cortex26!",
-    "welcome@cortex2026",
-    "welcome@cortex2026!",
-}
+DEFAULT_ORGANIZATION_PASSWORD = "Welcome@Cortex2026!"
+DEFAULT_ORGANIZATION_PASSWORDS = {DEFAULT_ORGANIZATION_PASSWORD}
+
+# Thread-safe in-memory cache of default password verification results.
+# Key: hashed_password (str), Value: is_default (bool)
+_DEFAULT_PASSWORD_CACHE: dict[str, bool] = {}
+
+
+def record_password_default_status(hashed_password: str, is_default: bool) -> None:
+    """Explicitly cache whether a password hash corresponds to the default company password."""
+    if hashed_password:
+        _DEFAULT_PASSWORD_CACHE[hashed_password] = is_default
 
 
 def is_default_password(hashed_password: str) -> bool:
-    """Return True if the user's password still matches any standard default company password."""
-    for default_pwd in DEFAULT_ORGANIZATION_PASSWORDS:
-        try:
-            if verify_password(default_pwd, hashed_password):
-                return True
-        except Exception:
-            continue
-    return False
+    """
+    Return True if the user's password matches the company default password ('Welcome@Cortex2026!').
+    Uses in-memory cache when available to eliminate redundant bcrypt CPU overhead.
+    """
+    if not hashed_password:
+        return False
+    cached = _DEFAULT_PASSWORD_CACHE.get(hashed_password)
+    if cached is not None:
+        return cached
+
+    try:
+        is_default = verify_password(DEFAULT_ORGANIZATION_PASSWORD, hashed_password)
+    except Exception:
+        is_default = False
+
+    _DEFAULT_PASSWORD_CACHE[hashed_password] = is_default
+    return is_default
+
+
+async def is_default_password_async(hashed_password: str) -> bool:
+    """
+    Asynchronously verify default password status. If uncached, executes bcrypt in a worker
+    thread via asyncio.to_thread so it never blocks the FastAPI main asyncio event loop.
+    """
+    if not hashed_password:
+        return False
+    cached = _DEFAULT_PASSWORD_CACHE.get(hashed_password)
+    if cached is not None:
+        return cached
+    return await asyncio.to_thread(is_default_password, hashed_password)
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:

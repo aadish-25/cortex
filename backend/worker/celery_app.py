@@ -30,6 +30,11 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,     # Pull 1 task at a time so other tasks stay queued in Redis
     broker_transport_options={"visibility_timeout": 600},  # Re-deliver unacked tasks if container vanishes (> task_time_limit)
     beat_schedule={
+        # Periodic worker heartbeat for sub-millisecond health observability
+        "worker_heartbeat_every_30_sec": {
+            "task": "backend.worker.tasks.heartbeat_task",
+            "schedule": 30.0,
+        },
         # Decision D8: Bidirectional reconciliation sweeper runs every 10 minutes
         "reconcile_vector_store_every_10_mins": {
             "task": "backend.worker.tasks.reconcile_vector_store_task",
@@ -37,3 +42,35 @@ celery_app.conf.update(
         },
     },
 )
+
+import time
+from celery.signals import heartbeat_sent, worker_ready, worker_shutdown
+import redis
+
+# Fast worker health check & non-blocking observability via Redis heartbeat key
+@worker_ready.connect
+def on_worker_ready(sender=None, **kwargs):
+    try:
+        r = redis.Redis.from_url(settings.REDIS_URL)
+        r.set("cortex:celery:worker_heartbeat", str(time.time()), ex=60)
+    except Exception:
+        pass
+
+
+@heartbeat_sent.connect
+def on_heartbeat_sent(sender=None, **kwargs):
+    try:
+        r = redis.Redis.from_url(settings.REDIS_URL)
+        r.set("cortex:celery:worker_heartbeat", str(time.time()), ex=60)
+    except Exception:
+        pass
+
+
+@worker_shutdown.connect
+def on_worker_shutdown(sender=None, **kwargs):
+    try:
+        r = redis.Redis.from_url(settings.REDIS_URL)
+        r.delete("cortex:celery:worker_heartbeat")
+    except Exception:
+        pass
+

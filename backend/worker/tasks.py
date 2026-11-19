@@ -142,3 +142,18 @@ def reconcile_vector_store_task() -> Dict[str, Any]:
     except Exception as exc:
         logger.error("Vector reconciliation failed: %s", exc, exc_info=True)
         return {"status": "FAILED", "error": str(exc)}
+
+
+@celery_app.task(name="backend.worker.tasks.heartbeat_task")
+def heartbeat_task() -> str:
+    """Lightweight periodic worker heartbeat updating Redis for sub-millisecond health probes."""
+    import time
+    import redis
+    from backend.core.config import settings
+    try:
+        r = redis.Redis.from_url(settings.REDIS_URL)
+        r.set("cortex:celery:worker_heartbeat", str(time.time()), ex=60)
+        return "OK"
+    except Exception:
+        return "ERROR"
+
