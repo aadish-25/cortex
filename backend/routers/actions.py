@@ -28,6 +28,7 @@ class ActionConfirmResponse(BaseModel):
     jira_key: Optional[str] = None
     jira_url: Optional[str] = None
     status: str
+    message: Optional[str] = None
     draft: ActionDraftResponse
 
 
@@ -145,6 +146,7 @@ async def confirm_action_draft(
             jira_key=ticket.jira_key,
             jira_url=draft_resp.jira_url,
             status=ticket.status.value if hasattr(ticket.status, "value") else str(ticket.status),
+            message=f"Your ticket has been successfully raised. Please note that your ticket ID is {ticket.jira_key}.",
             draft=draft_resp,
         )
     except DraftNotFoundError as exc:

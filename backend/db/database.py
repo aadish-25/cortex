@@ -55,6 +55,7 @@ async def init_db() -> None:
                 WHERE a.message_id = b.message_id AND a.user_id = b.user_id
                   AND (a.created_at < b.created_at OR (a.created_at = b.created_at AND a.id::text < b.id::text))
             """))
+            await conn.execute(sa.text("CREATE UNIQUE INDEX IF NOT EXISTS uq_tickets_jira_key ON tickets (jira_key) WHERE jira_key IS NOT NULL;"))
         elif "sqlite" in settings.DATABASE_URL:
             conversation_columns = await conn.run_sync(
                 lambda sync_conn: [row[1] for row in sync_conn.exec_driver_sql("PRAGMA table_info(conversations)").fetchall()]

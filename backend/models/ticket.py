@@ -16,5 +16,5 @@ class Ticket(SQLModel, table=True):
     description: str
     department: str
     status: TicketStatus = Field(default=TicketStatus.OUTBOX_PENDING)
-    jira_key: Optional[str] = Field(default=None, nullable=True, description="Future integration placeholder")
+    jira_key: Optional[str] = Field(default=None, nullable=True, unique=True, index=True, description="Unique Jira issue key e.g. Jira-ENG-17")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

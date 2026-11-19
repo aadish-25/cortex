@@ -379,3 +379,24 @@ async def test_fastapi_actions_endpoints(test_users):
         discard_resp = await client.post(f"/api/v1/actions/{d2_id}/discard", headers=headers)
         assert discard_resp.status_code == 200
         assert discard_resp.json()["status"] == "DISCARDED"
+
+
+@pytest.mark.asyncio
+async def test_concurrency_unique_jira_key_allocation(test_users):
+    """Verifies that consecutive/concurrent ticket creations allocate unique keys without collisions."""
+    user = test_users["eng"]
+    async with async_session() as session:
+        req1 = ActionDraftCreateRequest(query="Deploy Kubernetes staging pods for testing service")
+        draft1 = await action_engine.create_draft(session, user, req1)
+
+        req2 = ActionDraftCreateRequest(query="Deploy Kubernetes staging pods for second testing service")
+        draft2 = await action_engine.create_draft(session, user, req2)
+
+        ticket1, _ = await action_engine.confirm_draft(session, user, draft1.draft_id)
+        ticket2, _ = await action_engine.confirm_draft(session, user, draft2.draft_id)
+
+        assert ticket1.jira_key != ticket2.jira_key
+        assert ticket1.jira_key is not None
+        assert ticket2.jira_key is not None
+        assert "ENG" in ticket1.jira_key and "ENG" in ticket2.jira_key
+
