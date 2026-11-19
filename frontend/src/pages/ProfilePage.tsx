@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { ArrowLeft, ArrowUpRight, Brain, CheckCircle2, Lock, Mail, MessageSquare, Moon, ShieldCheck, Sun, X } from 'lucide-react'
+import { ArrowLeft, ArrowUpRight, Brain, CheckCircle2, Lock, Mail, MessageSquare, Moon, Pencil, ShieldCheck, Sun, X } from 'lucide-react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { api, ApiError } from '../api/client'
 import type { Conversation, Page } from '../api/types'
@@ -32,6 +32,7 @@ export function ProfilePage() {
   const [reqError, setReqError] = useState('')
   const [toast, setToast] = useState('')
   const [pendingReq, setPendingReq] = useState<EmailReq | null>(null)
+  const [hasSubmittedEver, setHasSubmittedEver] = useState(false)
 
   useEffect(() => {
     if (toast) {
@@ -45,6 +46,7 @@ export function ProfilePage() {
       .then((items) => {
         const p = items.find((i) => i.status === 'pending')
         setPendingReq(p || null)
+        setHasSubmittedEver(items.length > 0)
       })
       .catch(() => undefined)
   }
@@ -94,22 +96,32 @@ export function ProfilePage() {
         <div className="profile-hero"><span className="user-avatar profile-avatar">{initials}</span><div><h2>{user.name}</h2><p>{user.job_title}</p><span className="role-pill">{user.role}</span></div></div>
         <div className="profile-details">
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
-              <small>EMAIL</small>
-              {pendingReq ? (
-                <span className="status-pill pending" style={{ fontSize: 10 }}>Revision Pending ({pendingReq.requested_email})</span>
-              ) : (
+            <small>COMPANY EMAIL</small>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+              <strong>{user.email}</strong>
+              {!hasSubmittedEver && (
                 <button
                   type="button"
-                  className="secondary-button compact-button"
-                  style={{ fontSize: 11, padding: '2px 8px', height: 22 }}
+                  className="icon-button small"
+                  style={{ width: 22, height: 22, padding: 0 }}
                   onClick={() => setEmailModalOpen(true)}
+                  title="Request company email revision"
+                  aria-label="Edit company email"
                 >
-                  Request revision
+                  <Pencil size={12} />
                 </button>
               )}
             </div>
-            <strong>{user.email}</strong>
+            {pendingReq && (
+              <span className="status-pill pending" style={{ fontSize: 10, marginTop: 4, display: 'inline-block' }}>
+                Revision Pending ({pendingReq.requested_email})
+              </span>
+            )}
+            {hasSubmittedEver && !pendingReq && (
+              <small style={{ color: 'var(--muted)', fontSize: 10, display: 'block', marginTop: 3 }}>
+                One-time email revision limit reached
+              </small>
+            )}
           </div>
           <div><small>USERNAME</small><strong>{user.username}</strong></div>
           <div><small>DEPARTMENT</small><strong>{user.department}</strong></div>
@@ -183,33 +195,38 @@ export function ProfilePage() {
     </div>
 
     {emailModalOpen && (
-      <Modal title="Request Corporate Email Change" onClose={() => setEmailModalOpen(false)}>
+      <Modal title="Request Company Email Change" onClose={() => setEmailModalOpen(false)}>
         <form className="stack-form" onSubmit={handleEmailRequest}>
           <p style={{ margin: 0, fontSize: 13, color: 'var(--muted)', lineHeight: 1.5 }}>
-            Corporate company email addresses are maintained by administrators. If your name spelling has changed or you require a different official address, submit a revision request below.
+            Corporate company email addresses are maintained by administrators. Each employee may request a company email revision once in a lifetime.
           </p>
 
           <div className="form-grid" style={{ gridTemplateColumns: '1fr', marginTop: 10 }}>
             <label>
-              Current Email
+              Current Company Email
               <input value={user.email} disabled style={{ background: 'var(--surface-soft)', color: 'var(--muted)' }} />
             </label>
             <label>
-              Requested New Email *
+              Requested New Company Email *
               <input
                 type="email"
                 value={requestedEmail}
                 onChange={(e) => setRequestedEmail(e.target.value)}
-                placeholder="e.g. firstname.lastname@cortex.com"
+                placeholder="enter your new company email - example@cortex.com"
                 required
               />
+              {requestedEmail.length > 0 && !requestedEmail.trim().toLowerCase().endsWith('@cortex.com') && (
+                <span style={{ fontSize: 11, color: 'var(--danger)', marginTop: 3 }}>
+                  Official company email must end with @cortex.com
+                </span>
+              )}
             </label>
             <label>
               Reason for Request (Optional)
               <input
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
-                placeholder="e.g. Spelling error or preferred naming convention"
+                placeholder="e.g. Spelling correction or name preference"
               />
             </label>
           </div>
@@ -220,7 +237,11 @@ export function ProfilePage() {
             <button type="button" className="secondary-button" onClick={() => setEmailModalOpen(false)} disabled={submitting}>
               Cancel
             </button>
-            <button type="submit" className="primary-button" disabled={submitting || !requestedEmail.trim()}>
+            <button
+              type="submit"
+              className="primary-button"
+              disabled={submitting || !requestedEmail.trim().toLowerCase().endsWith('@cortex.com') || requestedEmail.trim().length <= 11}
+            >
               {submitting ? 'Submitting…' : 'Submit Revision Request'}
             </button>
           </div>

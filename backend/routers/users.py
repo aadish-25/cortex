@@ -102,6 +102,9 @@ async def list_users(
     elif account_status == "pending":
         conditions.append(User.is_active == False)
         conditions.append(or_(User.department == "Unassigned", User.job_title == "Pending Assignment"))
+    elif account_status == "email_pending":
+        email_sub = select(EmailChangeRequest.user_id).where(EmailChangeRequest.status == "pending")
+        conditions.append(User.id.in_(email_sub))
     elif account_status == "inactive":
         conditions.append(User.is_active == False)
         conditions.append(User.department != "Unassigned")
@@ -338,19 +341,36 @@ async def request_email_change(
 ):
     """
     Submit an official request to update assigned corporate email.
-    Reviewed by administrators.
+    Reviewed by administrators. Enforces strictly once-in-a-lifetime limit.
     """
     clean_email = payload.requested_email.strip().lower()
-    if "@" not in clean_email or "." not in clean_email:
+    if not clean_email.endswith("@cortex.com"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid email format.",
+            detail="Company email must end with @cortex.com",
+        )
+
+    local_part = clean_email[:-11]
+    if not local_part or not re.match(r"^[a-z0-9._-]+$", local_part):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid email prefix. Use letters, numbers, dots, or hyphens before @cortex.com",
         )
 
     if clean_email == current_user.email.lower():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Requested email is already your current email.",
+            detail="Requested email is already your current company email.",
+        )
+
+    # Strictly once in lifetime check
+    existing_any = await session.execute(
+        select(EmailChangeRequest).where(EmailChangeRequest.user_id == current_user.id)
+    )
+    if existing_any.scalars().first():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Company email can only be revised once in a lifetime. You have already submitted a revision request.",
         )
 
     dup = await session.execute(select(User).where(User.email == clean_email))
@@ -358,18 +378,6 @@ async def request_email_change(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="This email address is already assigned to another user.",
-        )
-
-    existing_req = await session.execute(
-        select(EmailChangeRequest).where(
-            EmailChangeRequest.user_id == current_user.id,
-            EmailChangeRequest.status == "pending",
-        )
-    )
-    if existing_req.scalars().first():
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="You already have a pending email revision request awaiting administrator review.",
         )
 
     req = EmailChangeRequest(
