@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ArrowUp, BookOpen, Brain, Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Copy, ExternalLink, FileSearch, FileText, LoaderCircle, MoreHorizontal, Pencil, Plus, RefreshCw, Search, ShieldAlert, ThumbsDown, ThumbsUp, X } from 'lucide-react'
+import { ArrowUp, BookOpen, Brain, Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Clock, Copy, ExternalLink, FileSearch, FileText, LoaderCircle, MoreHorizontal, Pencil, Plus, RefreshCw, Search, ShieldAlert, ThumbsDown, ThumbsUp, X } from 'lucide-react'
 import { api, streamChat, type StreamEvent } from '../api/client'
 import type { ChatMessage, CitationData, Conversation, Page } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
@@ -285,65 +285,111 @@ function ActionDraftCard({ draft }: { draft: any }) {
   const { user } = useAuth()
   const [currentDraft, setCurrentDraft] = useState(draft)
   const [status, setStatus] = useState<string>(draft.status || 'PENDING')
-  const [busy, setBusy] = useState(false)
   const [confirmedData, setConfirmedData] = useState<{ ticket_id?: string; jira_key?: string; jira_url?: string } | null>(
     draft.jira_key ? { jira_key: draft.jira_key, jira_url: draft.jira_url } : null
   )
 
-  // Edit Modal State
-  const [isEditing, setIsEditing] = useState(false)
+  // Countdown timer hook (15-min TTL)
+  const [secondsLeft, setSecondsLeft] = useState<number>(() => {
+    if (currentDraft.expires_at) {
+      const exp = new Date(currentDraft.expires_at).getTime()
+      const now = Date.now()
+      return Math.max(0, Math.floor((exp - now) / 1000))
+    }
+    return currentDraft.ttl_seconds_remaining ?? 900
+  })
+
+  const isConfirmed = status === 'CONFIRMED' || status === 'COMMITTED' || status === 'CREATED' || Boolean(confirmedData?.jira_key)
+
+  useEffect(() => {
+    if (isConfirmed || status === 'DISCARDED' || secondsLeft <= 0) return
+    const interval = setInterval(() => {
+      setSecondsLeft((prev) => {
+        if (prev <= 1) {
+          clearInterval(interval)
+          setStatus('EXPIRED')
+          return 0
+        }
+        return prev - 1
+      })
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [isConfirmed, status, secondsLeft])
+
+  const formatTimer = (sec: number) => {
+    const m = Math.floor(sec / 60)
+    const s = sec % 60
+    return `${m}:${s < 10 ? '0' : ''}${s}`
+  }
+
+  // Modals: Review/Edit Modal & View Confirmed Ticket Modal
+  const [isReviewOpen, setIsReviewOpen] = useState(false)
+  const [isViewOpen, setIsViewOpen] = useState(false)
+
+  // Editable fields in Review Modal
   const [editTitle, setEditTitle] = useState(currentDraft.title || '')
   const [editDescription, setEditDescription] = useState(currentDraft.description || '')
   const [editPriority, setEditPriority] = useState(currentDraft.priority || 'MEDIUM')
   const [editNotes, setEditNotes] = useState(currentDraft.domain_fields?.notes || '')
   const [savingEdit, setSavingEdit] = useState(false)
-  const [editError, setEditError] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [reviewError, setReviewError] = useState('')
 
-  const isConfirmed = status === 'CONFIRMED' || status === 'COMMITTED' || status === 'CREATED' || Boolean(confirmedData?.jira_key)
-
-  async function act(action: 'confirm' | 'discard') {
-    setBusy(true)
+  async function handleConfirmSubmit(e?: FormEvent) {
+    if (e) e.preventDefault()
+    setSubmitting(true)
+    setReviewError('')
     try {
-      const result = await api<any>(`/api/v1/actions/${currentDraft.draft_id}/${action}`, { method: 'POST' })
-      if (action === 'confirm') {
-        setStatus('CONFIRMED')
-        setConfirmedData({
-          ticket_id: result.ticket_id,
-          jira_key: result.jira_key || result.ticket_id?.slice(0, 8),
-          jira_url: result.jira_url,
+      // 1. If fields were edited, update draft first
+      if (
+        editTitle.trim() !== (currentDraft.title || '') ||
+        editDescription.trim() !== (currentDraft.description || '') ||
+        editPriority !== (currentDraft.priority || 'MEDIUM') ||
+        editNotes.trim() !== (currentDraft.domain_fields?.notes || '')
+      ) {
+        const updated = await api<any>(`/api/v1/actions/${currentDraft.draft_id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            title: editTitle.trim(),
+            description: editDescription.trim(),
+            priority: editPriority,
+            domain_fields: editNotes.trim() ? { notes: editNotes.trim() } : {},
+          }),
         })
-      } else {
-        setStatus('DISCARDED')
+        setCurrentDraft((prev: any) => ({ ...prev, ...updated }))
       }
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : 'Action failed')
+
+      // 2. Confirm and dispatch to Jira
+      const result = await api<any>(`/api/v1/actions/${currentDraft.draft_id}/confirm`, { method: 'POST' })
+      setStatus('CONFIRMED')
+      setConfirmedData({
+        ticket_id: result.ticket_id,
+        jira_key: result.jira_key || result.ticket_id?.slice(0, 8),
+        jira_url: result.jira_url,
+      })
+      setIsReviewOpen(false)
+    } catch (err) {
+      setReviewError(err instanceof Error ? err.message : 'Could not submit Jira ticket.')
     } finally {
-      setBusy(false)
+      setSubmitting(false)
     }
   }
 
-  async function handleSaveEdit(e: FormEvent) {
-    e.preventDefault()
-    setSavingEdit(true)
-    setEditError('')
+  async function handleDiscardDraft() {
+    setSubmitting(true)
+    setReviewError('')
     try {
-      const updated = await api<any>(`/api/v1/actions/${currentDraft.draft_id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({
-          title: editTitle.trim(),
-          description: editDescription.trim(),
-          priority: editPriority,
-          domain_fields: editNotes.trim() ? { notes: editNotes.trim() } : {},
-        }),
-      })
-      setCurrentDraft((prev: any) => ({ ...prev, ...updated }))
-      setIsEditing(false)
+      await api<any>(`/api/v1/actions/${currentDraft.draft_id}/discard`, { method: 'POST' })
+      setStatus('DISCARDED')
+      setIsReviewOpen(false)
     } catch (err) {
-      setEditError(err instanceof Error ? err.message : 'Could not save changes to ticket.')
+      setReviewError(err instanceof Error ? err.message : 'Could not discard draft.')
     } finally {
-      setSavingEdit(false)
+      setSubmitting(false)
     }
   }
+
+  const assignedKey = confirmedData?.jira_key || currentDraft.jira_key || `Jira-${currentDraft.project_key || 'ENG'}-17`
 
   return (
     <div className="action-draft-card">
@@ -358,27 +404,27 @@ function ActionDraftCard({ draft }: { draft: any }) {
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span className={`priority-tag ${String(currentDraft.priority || 'MEDIUM').toLowerCase()}`}>
-            {currentDraft.priority || 'MEDIUM'}
+          <span className={`priority-tag ${String(editPriority || currentDraft.priority || 'MEDIUM').toLowerCase()}`}>
+            {editPriority || currentDraft.priority || 'MEDIUM'}
           </span>
-          <span className={`status-pill ${isConfirmed ? 'active' : status === 'DISCARDED' ? 'inactive' : 'pending'}`}>
+          <span className={`status-pill ${isConfirmed ? 'active' : status === 'DISCARDED' ? 'inactive' : status === 'EXPIRED' ? 'inactive' : 'pending'}`}>
             {isConfirmed ? 'CONFIRMED' : status}
           </span>
         </div>
       </div>
 
       <div className="action-draft-content">
-        <h4 className="ticket-title">{currentDraft.title || 'Official Ticket Request'}</h4>
+        <h4 className="ticket-title">{editTitle || currentDraft.title || 'Official Ticket Request'}</h4>
         <div className="ticket-meta-pills">
           <span><strong>Department:</strong> {currentDraft.department || 'Engineering'}</span>
           <span><strong>Category:</strong> {currentDraft.taxonomy_tier || 'Service Request'}</span>
           <span><strong>Requester:</strong> {user?.name || 'Employee'}</span>
         </div>
-        <p className="ticket-description">{currentDraft.description || 'No description provided.'}</p>
-        {currentDraft.domain_fields?.notes && (
+        <p className="ticket-description">{editDescription || currentDraft.description || 'No description provided.'}</p>
+        {Boolean(editNotes || currentDraft.domain_fields?.notes) && (
           <div className="ticket-notes-box">
             <small>ATTACHED NOTES / DETAILS:</small>
-            <p>{currentDraft.domain_fields.notes}</p>
+            <p>{editNotes || currentDraft.domain_fields.notes}</p>
           </div>
         )}
       </div>
@@ -386,66 +432,63 @@ function ActionDraftCard({ draft }: { draft: any }) {
       {isConfirmed ? (
         <div className="ticket-confirmed-box">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <CheckCircle2 size={20} color="var(--success)" />
+            <CheckCircle2 size={22} color="var(--success)" style={{ flexShrink: 0 }} />
             <div>
               <strong style={{ fontSize: 13, color: 'var(--text)' }}>Ticket Created Successfully</strong>
-              <small style={{ display: 'block', color: 'var(--muted)', fontSize: 11, marginTop: 2 }}>
-                Assigned Key: <span className="jira-key-badge">{confirmedData?.jira_key || 'ENG-TICKET'}</span> · Dispatched to Jira Cloud
-              </small>
+              <div style={{ fontSize: 12, color: 'var(--text-soft)', marginTop: 2 }}>
+                Your ticket has been successfully raised. Please note that your ticket ID is <strong className="jira-key-badge">{assignedKey}</strong>.
+              </div>
             </div>
           </div>
-          {confirmedData?.jira_url && (
-            <a href={confirmedData.jira_url} target="_blank" rel="noreferrer" className="primary-button compact-button" style={{ fontSize: 11, height: 26, padding: '0 10px' }}>
-              View in Jira <ExternalLink size={12} />
-            </a>
-          )}
+          <button
+            type="button"
+            className="primary-button compact-button"
+            style={{ fontSize: 11, height: 28, padding: '0 12px', flexShrink: 0 }}
+            onClick={() => setIsViewOpen(true)}
+          >
+            View ticket
+          </button>
         </div>
       ) : status === 'DISCARDED' ? (
         <div className="ticket-discarded-box">
           <small>This draft was discarded and not submitted to Jira.</small>
         </div>
+      ) : status === 'EXPIRED' ? (
+        <div className="ticket-discarded-box">
+          <small>This draft has expired (15-minute TTL exceeded). Please request a new ticket.</small>
+        </div>
       ) : (
         <div className="action-draft-actions">
+          <div className="action-draft-timer">
+            <Clock size={12} />
+            <span>Expires in {formatTimer(secondsLeft)}</span>
+          </div>
           <button
             type="button"
-            className="secondary-button compact-button"
-            disabled={busy}
+            className="primary-button compact-button"
+            disabled={secondsLeft <= 0}
             onClick={() => {
               setEditTitle(currentDraft.title || '')
               setEditDescription(currentDraft.description || '')
               setEditPriority(currentDraft.priority || 'MEDIUM')
               setEditNotes(currentDraft.domain_fields?.notes || '')
-              setIsEditing(true)
+              setReviewError('')
+              setIsReviewOpen(true)
             }}
           >
-            <Pencil size={12} /> Review & Edit
-          </button>
-          <button
-            type="button"
-            className="secondary-button compact-button"
-            disabled={busy}
-            onClick={() => void act('discard')}
-          >
-            Discard
-          </button>
-          <button
-            type="button"
-            className="primary-button compact-button"
-            disabled={busy}
-            onClick={() => void act('confirm')}
-          >
-            {busy ? 'Submitting to Jira…' : 'Submit Ticket'}
+            <FileText size={12} /> Review draft
           </button>
         </div>
       )}
 
-      {isEditing && (
-        <Modal title="Review & Edit Jira Ticket" onClose={() => setIsEditing(false)} wide>
-          <form className="stack-form" onSubmit={handleSaveEdit}>
+      {/* 1. Review & Submit Modal */}
+      {isReviewOpen && (
+        <Modal title="Review & Submit Jira Ticket" onClose={() => setIsReviewOpen(false)} wide>
+          <form className="stack-form" onSubmit={handleConfirmSubmit}>
             <div style={{ padding: '10px 14px', background: 'var(--surface-soft)', border: '1px solid var(--border)', borderRadius: 8, display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, fontSize: 11 }}>
-              <div><small style={{ color: 'var(--muted)', display: 'block' }}>PROJECT SPACE</small><strong>{currentDraft.project_key || 'ENG'}</strong></div>
+              <div><small style={{ color: 'var(--muted)', display: 'block' }}>TARGET KEY</small><strong>Jira-[{currentDraft.project_key || 'ENG'}]-PENDING</strong></div>
+              <div><small style={{ color: 'var(--muted)', display: 'block' }}>PROJECT SPACE</small><strong>[{currentDraft.project_key || 'ENG'}]</strong></div>
               <div><small style={{ color: 'var(--muted)', display: 'block' }}>DEPARTMENT</small><strong>{currentDraft.department || 'Engineering'}</strong></div>
-              <div><small style={{ color: 'var(--muted)', display: 'block' }}>CLASSIFICATION</small><strong>{currentDraft.taxonomy_tier || 'Service Request'}</strong></div>
               <div><small style={{ color: 'var(--muted)', display: 'block' }}>REQUESTER</small><strong>{user?.name}</strong></div>
             </div>
 
@@ -489,17 +532,87 @@ function ActionDraftCard({ draft }: { draft: any }) {
               />
             </label>
 
-            {editError && <div className="inline-error">{editError}</div>}
+            {reviewError && <div className="inline-error">{reviewError}</div>}
 
-            <div className="modal-actions" style={{ marginTop: 16 }}>
-              <button type="button" className="secondary-button" onClick={() => setIsEditing(false)} disabled={savingEdit}>
-                Cancel
+            <div className="modal-actions" style={{ marginTop: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <button
+                type="button"
+                className="secondary-button"
+                style={{ color: 'var(--danger)', borderColor: 'var(--danger-soft)' }}
+                onClick={() => void handleDiscardDraft()}
+                disabled={submitting}
+              >
+                Discard Draft
               </button>
-              <button type="submit" className="primary-button" disabled={savingEdit || !editTitle.trim() || !editDescription.trim()}>
-                {savingEdit ? 'Saving…' : 'Save Changes'}
-              </button>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button type="button" className="secondary-button" onClick={() => setIsReviewOpen(false)} disabled={submitting}>
+                  Cancel
+                </button>
+                <button type="submit" className="primary-button" disabled={submitting || !editTitle.trim() || !editDescription.trim()}>
+                  {submitting ? 'Submitting to Jira…' : 'Confirm & Submit Ticket'}
+                </button>
+              </div>
             </div>
           </form>
+        </Modal>
+      )}
+
+      {/* 2. View Confirmed Ticket Modal */}
+      {isViewOpen && (
+        <Modal title={`Ticket Details — ${assignedKey}`} onClose={() => setIsViewOpen(false)} wide>
+          <div className="stack-form">
+            <div style={{ padding: '12px 14px', background: 'var(--surface-soft)', border: '1px solid var(--border)', borderRadius: 8, display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, fontSize: 11 }}>
+              <div><small style={{ color: 'var(--muted)', display: 'block' }}>TICKET ID</small><strong className="jira-key-badge">{assignedKey}</strong></div>
+              <div><small style={{ color: 'var(--muted)', display: 'block' }}>STATUS</small><strong style={{ color: 'var(--success)' }}>CREATED (Active)</strong></div>
+              <div><small style={{ color: 'var(--muted)', display: 'block' }}>PRIORITY</small><strong>{editPriority || currentDraft.priority || 'MEDIUM'}</strong></div>
+              <div><small style={{ color: 'var(--muted)', display: 'block' }}>DEPARTMENT</small><strong>{currentDraft.department || 'Engineering'}</strong></div>
+            </div>
+
+            <div style={{ marginTop: 10 }}>
+              <small style={{ color: 'var(--muted)', display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 700 }}>SUMMARY</small>
+              <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', padding: '8px 12px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6 }}>
+                {editTitle || currentDraft.title}
+              </div>
+            </div>
+
+            <div>
+              <small style={{ color: 'var(--muted)', display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 700 }}>DESCRIPTION</small>
+              <div style={{ fontSize: 12, lineHeight: 1.6, color: 'var(--text)', padding: '10px 12px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, whiteSpace: 'pre-wrap' }}>
+                {editDescription || currentDraft.description}
+              </div>
+            </div>
+
+            {Boolean(editNotes || currentDraft.domain_fields?.notes) && (
+              <div>
+                <small style={{ color: 'var(--muted)', display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 700 }}>ATTACHED NOTES & ASSETS</small>
+                <div style={{ fontSize: 12, color: 'var(--text)', padding: '8px 12px', background: 'var(--surface-soft)', border: '1px solid var(--border)', borderRadius: 6 }}>
+                  {editNotes || currentDraft.domain_fields?.notes}
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, fontSize: 11, color: 'var(--muted)' }}>
+              <div><strong>Requester:</strong> {user?.name} ({user?.email})</div>
+              <div><strong>Category:</strong> {currentDraft.taxonomy_tier || 'Service Request'}</div>
+            </div>
+
+            <div className="modal-actions" style={{ marginTop: 16, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              {confirmedData?.jira_url && (
+                <a
+                  href={confirmedData.jira_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="secondary-button"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                >
+                  Open in Jira Cloud <ExternalLink size={12} />
+                </a>
+              )}
+              <button type="button" className="primary-button" onClick={() => setIsViewOpen(false)}>
+                Close
+              </button>
+            </div>
+          </div>
         </Modal>
       )}
     </div>
