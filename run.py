@@ -260,15 +260,9 @@ def main() -> None:
         log("DOCKER", YELLOW, "Please ensure Docker Desktop is running, then run 'python run.py' again.")
         sys.exit(1)
 
-    # 3. Launch FastAPI (Scoped to backend/ to avoid reloading on frontend or storage edits).
-    backend_cmd = [
-        python_exe, "-m", "uvicorn", "backend.main:app",
-        "--reload",
-        "--reload-dir", str(BASE_DIR / "backend"),
-        "--host", "0.0.0.0",
-        "--port", "8000"
-    ]
-    log("BACKEND", GREEN, "Starting FastAPI backend on http://localhost:8000...")
+    # 3. Launch FastAPI via backend.dev_server (Safe reload supervisor on Windows).
+    backend_cmd = [python_exe, "-m", "backend.dev_server"]
+    log("BACKEND", GREEN, "Starting FastAPI backend on http://localhost:8000 (hot reload active)...")
     backend_proc = start_process(backend_cmd, "Backend (FastAPI)", "BACKEND", GREEN)
 
     # 4. Launch Celery worker and beat for document reindexing and scheduled reconciliation.
