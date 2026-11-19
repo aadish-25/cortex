@@ -131,34 +131,38 @@ export function AdminUsers() {
 
   async function openReview(user: User) {
     setSelected(user)
-    const parts = user.name.trim().split(/\s+/)
-    const firstName = parts[0] || ''
-    const lastName = parts.slice(1).join(' ') || ''
+    setError('')
+    const isApplicant = !user.is_active && (user.department === 'Unassigned' || user.job_title === 'Pending Assignment')
+    if (isApplicant) {
+      const parts = user.name.trim().split(/\s+/)
+      const firstName = parts[0] || ''
+      const lastName = parts.slice(1).join(' ') || ''
 
-    let suggestedEmail = `${firstName.toLowerCase()}.${lastName.toLowerCase()}@cortex.com`
-    let suggestedUsername = `${firstName.toLowerCase()}.${lastName.toLowerCase()}`
-    try {
-      const resp = await api<{ suggested_email: string; suggested_username: string }>(
-        `/api/v1/users/suggest-company-email?first_name=${encodeURIComponent(firstName)}&last_name=${encodeURIComponent(lastName)}&exclude_user_id=${user.id}`
-      )
-      suggestedEmail = resp.suggested_email
-      suggestedUsername = resp.suggested_username
-    } catch {
-      // Fallback if network or unhandled
+      let suggestedEmail = `${firstName.toLowerCase()}.${lastName.toLowerCase()}@cortex.com`
+      let suggestedUsername = `${firstName.toLowerCase()}.${lastName.toLowerCase()}`
+      try {
+        const resp = await api<{ suggested_email: string; suggested_username: string }>(
+          `/api/v1/users/suggest-company-email?first_name=${encodeURIComponent(firstName)}&last_name=${encodeURIComponent(lastName)}&exclude_user_id=${user.id}`
+        )
+        suggestedEmail = resp.suggested_email
+        suggestedUsername = resp.suggested_username
+      } catch {
+        // Fallback if network or unhandled
+      }
+
+      setApplicantForm({
+        first_name: firstName,
+        last_name: lastName,
+        personal_email: user.email,
+        email: suggestedEmail,
+        username: suggestedUsername,
+        password: 'Welcome@Cortex2026!',
+        job_title: '',
+        role: 'Employee',
+        department: 'Engineering',
+        clearance_level: 'Internal',
+      })
     }
-
-    setApplicantForm({
-      first_name: firstName,
-      last_name: lastName,
-      personal_email: user.email,
-      email: suggestedEmail,
-      username: suggestedUsername,
-      password: 'Welcome@Cortex2026!',
-      job_title: '',
-      role: 'Employee',
-      department: 'Engineering',
-      clearance_level: 'Internal',
-    })
     setModal('review')
   }
 
@@ -406,37 +410,17 @@ export function AdminUsers() {
                     <td>{new Date(person.created_at).toLocaleDateString()}</td>
                     <td>
                       <div className="row-actions">
-                        {isApplicant ? (
-                          <>
-                            <button className="primary-button small" style={{ minHeight: '30px', padding: '0 10px', fontSize: '11px' }} onClick={() => void openReview(person)} title="Review application">
-                              <ClipboardCheck size={14} /> Review
-                            </button>
-                            <button className="icon-button small danger" onClick={() => void rejectApplication(person)} title="Reject application">
-                              <Trash2 size={14} />
-                            </button>
-                          </>
+                        {hasPendingReview ? (
+                          <button
+                            className="primary-button small"
+                            style={{ minHeight: '30px', padding: '0 12px', fontSize: '11px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                            onClick={() => void openReview(person)}
+                            title={isApplicant ? "Review application" : "Review revision request"}
+                          >
+                            <ClipboardCheck size={14} /> Review {isApplicant ? 'Application' : 'Request'}
+                          </button>
                         ) : (
                           <>
-                            {emailReq && (
-                              <div style={{ display: 'inline-flex', gap: 5 }}>
-                                <button
-                                  className="secondary-button small danger"
-                                  style={{ minHeight: '30px', padding: '0 8px', fontSize: '11px', color: 'var(--danger)', borderColor: 'var(--danger-soft)' }}
-                                  onClick={() => void rejectEmailRevision(emailReq.id)}
-                                  title="Reject email revision request"
-                                >
-                                  ✕ Reject
-                                </button>
-                                <button
-                                  className="secondary-button small"
-                                  style={{ minHeight: '30px', padding: '0 8px', fontSize: '11px', color: 'var(--primary)', borderColor: 'var(--primary-line)' }}
-                                  onClick={() => void approveEmailRevision(emailReq.id, emailReq.requested_email)}
-                                  title={`Approve new email: ${emailReq.requested_email}${emailReq.reason ? ` (${emailReq.reason})` : ''}`}
-                                >
-                                  ✓ Accept {emailReq.requested_email}
-                                </button>
-                              </div>
-                            )}
                             <button className="icon-button small" onClick={() => openEdit(person)} title="Edit account">
                               <Pencil size={15} />
                             </button>
@@ -456,122 +440,218 @@ export function AdminUsers() {
         {result && <Pagination page={result.page} totalPages={result.total_pages} onChange={(next) => void load(next)} />}
       </section>
 
-      {modal === 'review' && selected && (
-        <Modal title="Review Application" onClose={() => setModal(null)} wide>
-          <div className="applicant-info-card">
-            <div>
-              <strong>{applicantForm.first_name} {applicantForm.last_name}</strong>
-              <small>Personal email: {selected.email}</small>
-            </div>
-            <span className="applicant-badge">Awaiting Approval</span>
-          </div>
+      {modal === 'review' && selected && (() => {
+        const isApplicant = !selected.is_active && (selected.department === 'Unassigned' || selected.job_title === 'Pending Assignment')
+        const emailReq = emailRequests[selected.id]
 
-          <form className="stack-form" onSubmit={acceptApplication}>
-            <div className="form-grid">
-              <label>
-                First name
-                <input
-                  value={applicantForm.first_name}
-                  onChange={(e) => setApplicantForm((f) => ({ ...f, first_name: e.target.value }))}
-                  required
-                />
-              </label>
-              <label>
-                Last name
-                <input
-                  value={applicantForm.last_name}
-                  onChange={(e) => setApplicantForm((f) => ({ ...f, last_name: e.target.value }))}
-                  required
-                />
-              </label>
-              <label>
-                Assigned Company Email *
-                <input
-                  type="email"
-                  value={applicantForm.email}
-                  onChange={(e) => setApplicantForm((f) => ({ ...f, email: e.target.value }))}
-                  required
-                />
-              </label>
-              <label>
-                Username *
-                <input
-                  value={applicantForm.username}
-                  onChange={(e) => setApplicantForm((f) => ({ ...f, username: e.target.value }))}
-                  required
-                />
-              </label>
-              <label>
-                Job Title *
-                <input
-                  value={applicantForm.job_title}
-                  onChange={(e) => setApplicantForm((f) => ({ ...f, job_title: e.target.value }))}
-                  placeholder="e.g. Software Engineer"
-                  required
-                />
-              </label>
-              <label>
-                Department *
-                <select
-                  value={applicantForm.department}
-                  onChange={(e) => setApplicantForm((f) => ({ ...f, department: e.target.value }))}
-                  required
-                >
-                  <option value="Engineering">Engineering</option>
-                  <option value="HR">HR</option>
-                  <option value="Finance">Finance</option>
-                  <option value="Enterprise">Enterprise</option>
-                </select>
-              </label>
-              <label>
-                Role *
-                <select
-                  value={applicantForm.role}
-                  onChange={(e) => setApplicantForm((f) => ({ ...f, role: e.target.value }))}
-                >
-                  <option value="Employee">Employee</option>
-                  <option value="Manager">Manager</option>
-                  <option value="Admin">Admin</option>
-                </select>
-              </label>
-              <label>
-                Clearance Level *
-                <select
-                  value={applicantForm.clearance_level}
-                  onChange={(e) => setApplicantForm((f) => ({ ...f, clearance_level: e.target.value }))}
-                >
-                  <option value="Public">Public</option>
-                  <option value="Internal">Internal</option>
-                  <option value="Confidential">Confidential</option>
-                </select>
-              </label>
-              <label style={{ gridColumn: 'span 2' }}>
-                Initial Password *
-                <input
-                  type="text"
-                  value={applicantForm.password}
-                  onChange={(e) => setApplicantForm((f) => ({ ...f, password: e.target.value }))}
-                  required
-                  minLength={10}
-                />
-                <small className="form-help">Initial credentials for the employee to sign in. Minimum 10 characters.</small>
-              </label>
-            </div>
-            {error && <div className="inline-error">{error}</div>}
-            <div className="modal-actions" style={{ justifyContent: 'space-between' }}>
-              <button type="button" className="secondary-button danger" onClick={() => void rejectApplication()} disabled={saving}>
-                <Trash2 size={15} /> Reject Application
-              </button>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button type="button" className="secondary-button" onClick={() => setModal(null)}>Cancel</button>
-                <button type="submit" className="primary-button" disabled={saving}>
-                  {saving ? 'Provisioning…' : 'Accept Application'}
-                </button>
+        if (isApplicant) {
+          return (
+            <Modal title="Review Application" onClose={() => setModal(null)} wide>
+              <div className="applicant-info-card">
+                <div>
+                  <strong>{applicantForm.first_name} {applicantForm.last_name}</strong>
+                  <small>Personal email: {selected.email}</small>
+                </div>
+                <span className="applicant-badge">Awaiting Approval</span>
               </div>
-            </div>
-          </form>
-        </Modal>
-      )}
+
+              <form className="stack-form" onSubmit={acceptApplication}>
+                <div className="form-grid">
+                  <label>
+                    First name
+                    <input
+                      value={applicantForm.first_name}
+                      onChange={(e) => setApplicantForm((f) => ({ ...f, first_name: e.target.value }))}
+                      required
+                    />
+                  </label>
+                  <label>
+                    Last name
+                    <input
+                      value={applicantForm.last_name}
+                      onChange={(e) => setApplicantForm((f) => ({ ...f, last_name: e.target.value }))}
+                      required
+                    />
+                  </label>
+                  <label>
+                    Assigned Company Email *
+                    <input
+                      type="email"
+                      value={applicantForm.email}
+                      onChange={(e) => setApplicantForm((f) => ({ ...f, email: e.target.value }))}
+                      required
+                    />
+                  </label>
+                  <label>
+                    Username *
+                    <input
+                      value={applicantForm.username}
+                      onChange={(e) => setApplicantForm((f) => ({ ...f, username: e.target.value }))}
+                      required
+                    />
+                  </label>
+                  <label>
+                    Job Title *
+                    <input
+                      value={applicantForm.job_title}
+                      onChange={(e) => setApplicantForm((f) => ({ ...f, job_title: e.target.value }))}
+                      placeholder="e.g. Software Engineer"
+                      required
+                    />
+                  </label>
+                  <label>
+                    Department *
+                    <select
+                      value={applicantForm.department}
+                      onChange={(e) => setApplicantForm((f) => ({ ...f, department: e.target.value }))}
+                      required
+                    >
+                      <option value="Engineering">Engineering</option>
+                      <option value="HR">HR</option>
+                      <option value="Finance">Finance</option>
+                      <option value="Enterprise">Enterprise</option>
+                    </select>
+                  </label>
+                  <label>
+                    Role *
+                    <select
+                      value={applicantForm.role}
+                      onChange={(e) => setApplicantForm((f) => ({ ...f, role: e.target.value }))}
+                    >
+                      <option value="Employee">Employee</option>
+                      <option value="Manager">Manager</option>
+                      <option value="Admin">Admin</option>
+                    </select>
+                  </label>
+                  <label>
+                    Clearance Level *
+                    <select
+                      value={applicantForm.clearance_level}
+                      onChange={(e) => setApplicantForm((f) => ({ ...f, clearance_level: e.target.value }))}
+                    >
+                      <option value="Public">Public</option>
+                      <option value="Internal">Internal</option>
+                      <option value="Confidential">Confidential</option>
+                    </select>
+                  </label>
+                  <label style={{ gridColumn: 'span 2' }}>
+                    Initial Password *
+                    <input
+                      type="text"
+                      value={applicantForm.password}
+                      onChange={(e) => setApplicantForm((f) => ({ ...f, password: e.target.value }))}
+                      required
+                      minLength={10}
+                    />
+                    <small className="form-help">Initial credentials for the employee to sign in. Minimum 10 characters.</small>
+                  </label>
+                </div>
+                {error && <div className="inline-error">{error}</div>}
+                <div className="modal-actions" style={{ justifyContent: 'space-between' }}>
+                  <button type="button" className="secondary-button danger" onClick={() => void rejectApplication()} disabled={saving}>
+                    <Trash2 size={15} /> Reject Application
+                  </button>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button type="button" className="secondary-button" onClick={() => setModal(null)}>Cancel</button>
+                    <button type="submit" className="primary-button" disabled={saving}>
+                      {saving ? 'Provisioning…' : 'Accept Application'}
+                    </button>
+                  </div>
+                </div>
+              </form>
+            </Modal>
+          )
+        }
+
+        if (emailReq) {
+          return (
+            <Modal title="Review Request · Email Revision" onClose={() => setModal(null)} wide>
+              <div className="applicant-info-card">
+                <div>
+                  <strong>{selected.name}</strong>
+                  <small>@{selected.username} · {selected.job_title} ({selected.department})</small>
+                </div>
+                <span className="applicant-badge" style={{ color: 'var(--primary)', borderColor: 'var(--primary-line)', background: 'var(--primary-soft)' }}>
+                  Email Revision Request
+                </span>
+              </div>
+
+              <div style={{ margin: '18px 0', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                  <div style={{ padding: '12px 14px', background: 'var(--surface-soft)', border: '1px solid var(--border)', borderRadius: 8 }}>
+                    <small style={{ color: 'var(--muted)', display: 'block', fontSize: 11, marginBottom: 4, textTransform: 'uppercase', fontWeight: 700 }}>Current Corporate Email</small>
+                    <strong style={{ fontSize: 13, color: 'var(--text)' }}>{selected.email}</strong>
+                  </div>
+                  <div style={{ padding: '12px 14px', background: 'var(--primary-soft)', border: '1px solid var(--primary-line)', borderRadius: 8 }}>
+                    <small style={{ color: 'var(--primary)', display: 'block', fontSize: 11, marginBottom: 4, textTransform: 'uppercase', fontWeight: 700 }}>Requested New Email</small>
+                    <strong style={{ fontSize: 13, color: 'var(--primary)' }}>{emailReq.requested_email}</strong>
+                  </div>
+                </div>
+
+                <div style={{ padding: '12px 14px', background: 'var(--surface-soft)', border: '1px solid var(--border)', borderRadius: 8 }}>
+                  <small style={{ color: 'var(--muted)', display: 'block', fontSize: 11, marginBottom: 4, textTransform: 'uppercase', fontWeight: 700 }}>Employee Reason</small>
+                  <p style={{ margin: 0, fontSize: 12, color: 'var(--text)', lineHeight: 1.5 }}>
+                    {emailReq.reason ? `"${emailReq.reason}"` : 'No specific reason provided by employee.'}
+                  </p>
+                </div>
+
+                <div style={{ padding: '10px 14px', background: 'var(--surface-soft)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 11, color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span>🔒</span>
+                  <span>Approving this request will immediately update the employee's corporate email and require re-authentication.</span>
+                </div>
+              </div>
+
+              {error && <div className="inline-error" style={{ marginBottom: 14 }}>{error}</div>}
+
+              <div className="modal-actions" style={{ justifyContent: 'space-between' }}>
+                <button
+                  type="button"
+                  className="secondary-button danger"
+                  disabled={saving}
+                  onClick={async () => {
+                    setSaving(true)
+                    setError('')
+                    try {
+                      await rejectEmailRevision(emailReq.id)
+                      setModal(null)
+                    } catch (err) {
+                      setError(err instanceof ApiError ? err.message : 'Could not reject request.')
+                    } finally {
+                      setSaving(false)
+                    }
+                  }}
+                >
+                  <X size={15} /> Reject Request
+                </button>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button type="button" className="secondary-button" onClick={() => setModal(null)}>Cancel</button>
+                  <button
+                    type="button"
+                    className="primary-button"
+                    disabled={saving}
+                    onClick={async () => {
+                      setSaving(true)
+                      setError('')
+                      try {
+                        await approveEmailRevision(emailReq.id, emailReq.requested_email)
+                        setModal(null)
+                      } catch (err) {
+                        setError(err instanceof ApiError ? err.message : 'Could not approve request.')
+                      } finally {
+                        setSaving(false)
+                      }
+                    }}
+                  >
+                    <Check size={15} /> {saving ? 'Approving…' : 'Approve Revision'}
+                  </button>
+                </div>
+              </div>
+            </Modal>
+          )
+        }
+
+        return null
+      })()}
 
       {(modal === 'create' || modal === 'edit') && (
         <Modal title={modal === 'create' ? 'Create user account' : 'Edit user account'} onClose={() => setModal(null)} wide>
