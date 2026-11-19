@@ -79,6 +79,48 @@ async def get_action_draft(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
 
 
+from backend.models.enums import TicketPriority
+
+
+class ActionDraftUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    priority: Optional[TicketPriority] = None
+    department: Optional[str] = None
+    domain_fields: Optional[dict] = None
+
+
+@router.patch("/{draft_id}", response_model=ActionDraftResponse)
+async def update_action_draft(
+    draft_id: uuid.UUID,
+    payload: ActionDraftUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    """
+    Updates editable fields on a pending ActionDraft before user commits it.
+    """
+    try:
+        return await action_engine.update_draft(
+            session=session,
+            user=current_user,
+            draft_id=draft_id,
+            title=payload.title,
+            description=payload.description,
+            priority=payload.priority,
+            department=payload.department,
+            domain_fields=payload.domain_fields,
+        )
+    except DraftNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except DraftAccessDeniedError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
+    except DraftExpiredError as exc:
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc))
+    except ActionError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
 @router.post("/{draft_id}/confirm", response_model=ActionConfirmResponse)
 async def confirm_action_draft(
     draft_id: uuid.UUID,

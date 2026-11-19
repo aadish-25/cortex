@@ -189,6 +189,57 @@ class ActionEngine:
 
         return self._to_response(draft)
 
+    async def update_draft(
+        self,
+        session: AsyncSession,
+        user: User,
+        draft_id: uuid.UUID,
+        title: Optional[str] = None,
+        description: Optional[str] = None,
+        priority: Optional[TicketPriority] = None,
+        department: Optional[str] = None,
+        domain_fields: Optional[Dict[str, Any]] = None,
+    ) -> ActionDraftResponse:
+        """Updates fields of a pending ActionDraft before user commits it."""
+        stmt = select(ActionDraft).where(ActionDraft.id == draft_id)
+        result = await session.execute(stmt)
+        draft = result.scalar_one_or_none()
+
+        if not draft:
+            raise DraftNotFoundError(f"Action draft {draft_id} not found.")
+
+        if draft.user_id != user.id and user.role != Role.ADMIN:
+            raise DraftAccessDeniedError("Access denied: You cannot edit an action draft belonging to another user.")
+
+        if draft.is_committed:
+            raise ActionError("Cannot edit a draft that has already been confirmed.")
+
+        now = datetime.now(timezone.utc)
+        expires_at = draft.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if now > expires_at:
+            raise DraftExpiredError(f"Action draft {draft_id} has expired.")
+
+        payload = draft.parsed_payload
+        if title is not None and title.strip():
+            payload.title = title.strip()
+        if description is not None:
+            payload.description = description.strip()
+        if priority is not None:
+            payload.priority = priority
+        if department is not None and department.strip():
+            payload.department = department.strip()
+        if domain_fields is not None:
+            payload.domain_fields.update(domain_fields)
+
+        draft.set_payload(payload)
+        session.add(draft)
+        await session.commit()
+        await session.refresh(draft)
+
+        return self._to_response(draft)
+
     async def confirm_draft(
         self,
         session: AsyncSession,

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ArrowUp, BookOpen, Brain, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileSearch, LoaderCircle, MoreHorizontal, Plus, RefreshCw, Search, ShieldAlert, ThumbsDown, ThumbsUp, X } from 'lucide-react'
+import { ArrowUp, BookOpen, Brain, Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Copy, ExternalLink, FileSearch, FileText, LoaderCircle, MoreHorizontal, Pencil, Plus, RefreshCw, Search, ShieldAlert, ThumbsDown, ThumbsUp, X } from 'lucide-react'
 import { api, streamChat, type StreamEvent } from '../api/client'
 import type { ChatMessage, CitationData, Conversation, Page } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
@@ -165,7 +165,7 @@ function AssistantMessage({ message, variants, allMessages, onOpenSources, onReg
       {active.actionDraft && <ActionDraftCard draft={active.actionDraft} />}
       {active.error && <div className="inline-error">{active.error}</div>}
       {active.interrupted && <div className="partial-note">This response was interrupted. The partial answer has been saved.</div>}
-      {active.suggestions && active.suggestions.length > 0 && <div className="suggestion-row">{active.suggestions.map((suggestion) => <button key={suggestion} className="suggestion-pill" onClick={() => onSuggestion(suggestion)}>{suggestion}</button>)}</div>}
+      {!active.actionDraft && active.suggestions && active.suggestions.length > 0 && <div className="suggestion-row">{active.suggestions.map((suggestion) => <button key={suggestion} className="suggestion-pill" onClick={() => onSuggestion(suggestion)}>{suggestion}</button>)}</div>}
       {!active.streaming && <div className="message-toolbar">
         <div className="message-toolbar-left">
           <button className={`message-action like-btn ${currentFeedback?.positive === true ? 'active' : ''}`} onClick={() => onFeedback(active, true)} title={currentFeedback?.positive === true ? 'Undo helpful' : 'Helpful'} aria-label="Helpful"><ThumbsUp size={14} /></button>
@@ -282,17 +282,228 @@ function MemoryEventCard({ event }: { event: MemoryEventData }) {
 }
 
 function ActionDraftCard({ draft }: { draft: any }) {
-  const [status, setStatus] = useState(draft.status || 'PENDING')
+  const { user } = useAuth()
+  const [currentDraft, setCurrentDraft] = useState(draft)
+  const [status, setStatus] = useState<string>(draft.status || 'PENDING')
   const [busy, setBusy] = useState(false)
+  const [confirmedData, setConfirmedData] = useState<{ ticket_id?: string; jira_key?: string; jira_url?: string } | null>(
+    draft.jira_key ? { jira_key: draft.jira_key, jira_url: draft.jira_url } : null
+  )
+
+  // Edit Modal State
+  const [isEditing, setIsEditing] = useState(false)
+  const [editTitle, setEditTitle] = useState(currentDraft.title || '')
+  const [editDescription, setEditDescription] = useState(currentDraft.description || '')
+  const [editPriority, setEditPriority] = useState(currentDraft.priority || 'MEDIUM')
+  const [editNotes, setEditNotes] = useState(currentDraft.domain_fields?.notes || '')
+  const [savingEdit, setSavingEdit] = useState(false)
+  const [editError, setEditError] = useState('')
+
+  const isConfirmed = status === 'CONFIRMED' || status === 'COMMITTED' || status === 'CREATED' || Boolean(confirmedData?.jira_key)
+
   async function act(action: 'confirm' | 'discard') {
     setBusy(true)
     try {
-      const result = await api<any>(`/api/v1/actions/${draft.draft_id}/${action}`, { method: 'POST' })
-      setStatus(result.status || (action === 'confirm' ? 'COMMITTED' : 'DISCARDED'))
-    } catch (error) { setStatus(error instanceof Error ? error.message : 'Action failed') }
-    finally { setBusy(false) }
+      const result = await api<any>(`/api/v1/actions/${currentDraft.draft_id}/${action}`, { method: 'POST' })
+      if (action === 'confirm') {
+        setStatus('CONFIRMED')
+        setConfirmedData({
+          ticket_id: result.ticket_id,
+          jira_key: result.jira_key || result.ticket_id?.slice(0, 8),
+          jira_url: result.jira_url,
+        })
+      } else {
+        setStatus('DISCARDED')
+      }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Action failed')
+    } finally {
+      setBusy(false)
+    }
   }
-  return <div className="action-draft-card"><div className="action-draft-heading"><span className="action-draft-icon">A</span><div><small>PROPOSED WORKFLOW</small><strong>{draft.title || draft.action_type || 'Action draft'}</strong></div><span className="status-pill">{status}</span></div><p>{draft.description || 'Review the proposed action before committing it.'}</p>{!['COMMITTED', 'DISCARDED', 'EXPIRED'].includes(status) && <div className="action-draft-actions"><button className="secondary-button compact-button" disabled={busy} onClick={() => void act('discard')}>Discard</button><button className="primary-button compact-button" disabled={busy} onClick={() => void act('confirm')}>{busy ? 'Working…' : 'Confirm action'}</button></div>}</div>
+
+  async function handleSaveEdit(e: FormEvent) {
+    e.preventDefault()
+    setSavingEdit(true)
+    setEditError('')
+    try {
+      const updated = await api<any>(`/api/v1/actions/${currentDraft.draft_id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          title: editTitle.trim(),
+          description: editDescription.trim(),
+          priority: editPriority,
+          domain_fields: editNotes.trim() ? { notes: editNotes.trim() } : {},
+        }),
+      })
+      setCurrentDraft((prev: any) => ({ ...prev, ...updated }))
+      setIsEditing(false)
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : 'Could not save changes to ticket.')
+    } finally {
+      setSavingEdit(false)
+    }
+  }
+
+  return (
+    <div className="action-draft-card">
+      <div className="action-draft-heading">
+        <div className="action-draft-badge-row">
+          <span className="action-draft-icon">
+            <FileText size={15} />
+          </span>
+          <div className="action-draft-meta-tags">
+            <span className="workflow-tag">PROPOSED JIRA WORKFLOW</span>
+            <span className="project-key-tag">[{currentDraft.project_key || 'ENG'}]</span>
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span className={`priority-tag ${String(currentDraft.priority || 'MEDIUM').toLowerCase()}`}>
+            {currentDraft.priority || 'MEDIUM'}
+          </span>
+          <span className={`status-pill ${isConfirmed ? 'active' : status === 'DISCARDED' ? 'inactive' : 'pending'}`}>
+            {isConfirmed ? 'CONFIRMED' : status}
+          </span>
+        </div>
+      </div>
+
+      <div className="action-draft-content">
+        <h4 className="ticket-title">{currentDraft.title || 'Official Ticket Request'}</h4>
+        <div className="ticket-meta-pills">
+          <span><strong>Department:</strong> {currentDraft.department || 'Engineering'}</span>
+          <span><strong>Category:</strong> {currentDraft.taxonomy_tier || 'Service Request'}</span>
+          <span><strong>Requester:</strong> {user?.name || 'Employee'}</span>
+        </div>
+        <p className="ticket-description">{currentDraft.description || 'No description provided.'}</p>
+        {currentDraft.domain_fields?.notes && (
+          <div className="ticket-notes-box">
+            <small>ATTACHED NOTES / DETAILS:</small>
+            <p>{currentDraft.domain_fields.notes}</p>
+          </div>
+        )}
+      </div>
+
+      {isConfirmed ? (
+        <div className="ticket-confirmed-box">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <CheckCircle2 size={20} color="var(--success)" />
+            <div>
+              <strong style={{ fontSize: 13, color: 'var(--text)' }}>Ticket Created Successfully</strong>
+              <small style={{ display: 'block', color: 'var(--muted)', fontSize: 11, marginTop: 2 }}>
+                Assigned Key: <span className="jira-key-badge">{confirmedData?.jira_key || 'ENG-TICKET'}</span> · Dispatched to Jira Cloud
+              </small>
+            </div>
+          </div>
+          {confirmedData?.jira_url && (
+            <a href={confirmedData.jira_url} target="_blank" rel="noreferrer" className="primary-button compact-button" style={{ fontSize: 11, height: 26, padding: '0 10px' }}>
+              View in Jira <ExternalLink size={12} />
+            </a>
+          )}
+        </div>
+      ) : status === 'DISCARDED' ? (
+        <div className="ticket-discarded-box">
+          <small>This draft was discarded and not submitted to Jira.</small>
+        </div>
+      ) : (
+        <div className="action-draft-actions">
+          <button
+            type="button"
+            className="secondary-button compact-button"
+            disabled={busy}
+            onClick={() => {
+              setEditTitle(currentDraft.title || '')
+              setEditDescription(currentDraft.description || '')
+              setEditPriority(currentDraft.priority || 'MEDIUM')
+              setEditNotes(currentDraft.domain_fields?.notes || '')
+              setIsEditing(true)
+            }}
+          >
+            <Pencil size={12} /> Review & Edit
+          </button>
+          <button
+            type="button"
+            className="secondary-button compact-button"
+            disabled={busy}
+            onClick={() => void act('discard')}
+          >
+            Discard
+          </button>
+          <button
+            type="button"
+            className="primary-button compact-button"
+            disabled={busy}
+            onClick={() => void act('confirm')}
+          >
+            {busy ? 'Submitting to Jira…' : 'Submit Ticket'}
+          </button>
+        </div>
+      )}
+
+      {isEditing && (
+        <Modal title="Review & Edit Jira Ticket" onClose={() => setIsEditing(false)} wide>
+          <form className="stack-form" onSubmit={handleSaveEdit}>
+            <div style={{ padding: '10px 14px', background: 'var(--surface-soft)', border: '1px solid var(--border)', borderRadius: 8, display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, fontSize: 11 }}>
+              <div><small style={{ color: 'var(--muted)', display: 'block' }}>PROJECT SPACE</small><strong>{currentDraft.project_key || 'ENG'}</strong></div>
+              <div><small style={{ color: 'var(--muted)', display: 'block' }}>DEPARTMENT</small><strong>{currentDraft.department || 'Engineering'}</strong></div>
+              <div><small style={{ color: 'var(--muted)', display: 'block' }}>CLASSIFICATION</small><strong>{currentDraft.taxonomy_tier || 'Service Request'}</strong></div>
+              <div><small style={{ color: 'var(--muted)', display: 'block' }}>REQUESTER</small><strong>{user?.name}</strong></div>
+            </div>
+
+            <label style={{ marginTop: 10 }}>
+              Summary / Title *
+              <input
+                value={editTitle}
+                onChange={(e) => setEditTitle(e.target.value)}
+                placeholder="Brief summary of the issue or request"
+                required
+              />
+            </label>
+
+            <label>
+              Priority
+              <select value={editPriority} onChange={(e) => setEditPriority(e.target.value)}>
+                <option value="LOW">Low</option>
+                <option value="MEDIUM">Medium</option>
+                <option value="HIGH">High</option>
+                <option value="CRITICAL">Critical</option>
+              </select>
+            </label>
+
+            <label>
+              Detailed Description *
+              <textarea
+                value={editDescription}
+                onChange={(e) => setEditDescription(e.target.value)}
+                rows={5}
+                placeholder="Detailed explanation, impact, steps to reproduce, or justification"
+                required
+              />
+            </label>
+
+            <label>
+              Additional Information / Attachment Notes (Optional)
+              <input
+                value={editNotes}
+                onChange={(e) => setEditNotes(e.target.value)}
+                placeholder="e.g. Receipt image link, serial number, cost center"
+              />
+            </label>
+
+            {editError && <div className="inline-error">{editError}</div>}
+
+            <div className="modal-actions" style={{ marginTop: 16 }}>
+              <button type="button" className="secondary-button" onClick={() => setIsEditing(false)} disabled={savingEdit}>
+                Cancel
+              </button>
+              <button type="submit" className="primary-button" disabled={savingEdit || !editTitle.trim() || !editDescription.trim()}>
+                {savingEdit ? 'Saving…' : 'Save Changes'}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+    </div>
+  )
 }
 
 export function ChatPage() {
