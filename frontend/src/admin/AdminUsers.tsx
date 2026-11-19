@@ -172,7 +172,8 @@ export function AdminUsers() {
     setError('')
     try {
       if (modal === 'create') {
-        await api('/api/v1/users/', { method: 'POST', body: JSON.stringify(form) })
+        const createPayload = { ...form, password: 'Welcome@Cortex2026!' }
+        await api('/api/v1/users/', { method: 'POST', body: JSON.stringify(createPayload) })
         setToast('User created.')
       } else if (modal === 'edit' && selected) {
         const payload: Record<string, unknown> = {
@@ -534,17 +535,18 @@ export function AdminUsers() {
                       <option value="Confidential">Confidential</option>
                     </select>
                   </label>
-                  <label style={{ gridColumn: 'span 2' }}>
-                    Initial Password *
-                    <input
-                      type="text"
-                      value={applicantForm.password}
-                      onChange={(e) => setApplicantForm((f) => ({ ...f, password: e.target.value }))}
-                      required
-                      minLength={10}
-                    />
-                    <small className="form-help">Initial credentials for the employee to sign in. Minimum 10 characters.</small>
-                  </label>
+                  <div style={{ gridColumn: 'span 2', padding: '10px 14px', background: 'var(--surface-soft)', border: '1px solid var(--border)', borderRadius: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                      <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--muted)' }}>Initial Onboarding Password</span>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--primary)', background: 'var(--primary-soft)', padding: '2px 8px', borderRadius: 4 }}>ENFORCED BY POLICY</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                      <code style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', background: 'var(--surface)', padding: '4px 10px', borderRadius: 6, border: '1px solid var(--border)' }}>Welcome@Cortex2026!</code>
+                    </div>
+                    <small style={{ display: 'block', marginTop: 6, color: 'var(--muted)', fontSize: 11, lineHeight: 1.4 }}>
+                      🔒 <strong>Password security policy:</strong> Administrators cannot change or customize employee passwords. All new accounts are provisioned with the standard default password, and the employee is strictly required to set their own personal password upon initial sign-in.
+                    </small>
+                  </div>
                 </div>
                 {error && <div className="inline-error">{error}</div>}
                 <div className="modal-actions" style={{ justifyContent: 'space-between' }}>
@@ -664,13 +666,30 @@ export function AdminUsers() {
               <label>Department<input value={form.department} onChange={(e) => setForm((f) => ({ ...f, department: e.target.value }))} required /></label>
               <label>Role<select value={form.role} onChange={(e) => setForm((f) => ({ ...f, role: e.target.value }))}><option>Employee</option><option>Manager</option><option>Admin</option></select></label>
               <label>Clearance<select value={form.clearance_level} onChange={(e) => setForm((f) => ({ ...f, clearance_level: e.target.value }))}><option>Public</option><option>Internal</option><option>Confidential</option></select></label>
-              {modal === 'create' ? (
-                <label>Password *<input type="password" value={form.password} onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))} required minLength={10} /></label>
-              ) : (
-                <div style={{ gridColumn: 'span 2', padding: '8px 12px', background: 'var(--surface-soft)', border: '1px solid var(--border)', borderRadius: 6, fontSize: '11px', color: 'var(--muted)' }}>
-                  🔒 <strong>Password security:</strong> Administrators cannot view or modify employee personal passwords. Employees configure and manage their own passwords upon login.
+              <div style={{ gridColumn: 'span 2', padding: '10px 14px', background: 'var(--surface-soft)', border: '1px solid var(--border)', borderRadius: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--muted)' }}>
+                    {modal === 'create' ? 'Initial Onboarding Password' : 'Password Security'}
+                  </span>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--primary)', background: 'var(--primary-soft)', padding: '2px 8px', borderRadius: 4 }}>
+                    {modal === 'create' ? 'ENFORCED BY POLICY' : 'PROTECTED'}
+                  </span>
                 </div>
-              )}
+                {modal === 'create' ? (
+                  <>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                      <code style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', background: 'var(--surface)', padding: '4px 10px', borderRadius: 6, border: '1px solid var(--border)' }}>Welcome@Cortex2026!</code>
+                    </div>
+                    <small style={{ display: 'block', marginTop: 6, color: 'var(--muted)', fontSize: 11, lineHeight: 1.4 }}>
+                      🔒 <strong>Standard policy:</strong> All new accounts are provisioned with the organization default password. The employee will be prompted to choose their own personal password on first login.
+                    </small>
+                  </>
+                ) : (
+                  <small style={{ display: 'block', color: 'var(--muted)', fontSize: 11, lineHeight: 1.4 }}>
+                    🔒 Administrators cannot view or modify employee personal passwords. Employees configure and manage their own passwords upon login.
+                  </small>
+                )}
+              </div>
             </div>
             {modal === 'create' && <p className="form-help">Accounts created here are active immediately. Use the access-request flow for employee self-registration.</p>}
             {error && <div className="inline-error">{error}</div>}

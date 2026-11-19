@@ -40,8 +40,9 @@ async def create_user(
             detail="A user with this username or email already exists",
         )
 
-    # 2. Hash password securely
-    hashed_pwd = hash_password(payload.password)
+    # 2. Hash standard default organization password securely (enforcing company onboarding password)
+    # Administrators are not allowed to choose custom passwords for employees; standard default is strictly enforced
+    hashed_pwd = hash_password("Welcome@Cortex2026!")
 
     # 3. Create user entity
     new_user = User(
@@ -266,19 +267,25 @@ async def update_user(
         user.clearance_level = payload.clearance_level
     if payload.password:
         if admin_user.id != user.id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Administrators cannot modify an employee's personal password. Employees must change their own password.",
-            )
-        cleaned = payload.password.strip()
-        from backend.core.security import DEFAULT_ORGANIZATION_PASSWORDS
-        if cleaned.lower() in {p.lower() for p in DEFAULT_ORGANIZATION_PASSWORDS}:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="This password is not allowed. You cannot keep or reuse the default company password.",
-            )
-        user.hashed_password = hash_password(cleaned)
-        user.token_version = max(1, user.token_version) + 1
+            # Allow provisioning default password only when activating a new employee applicant
+            is_activating_applicant = not user.is_active and payload.is_active is True
+            if not is_activating_applicant:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Administrators cannot modify an employee's personal password. Employees must change their own password.",
+                )
+            # Strictly enforce standard company default password during activation
+            user.hashed_password = hash_password("Welcome@Cortex2026!")
+        else:
+            cleaned = payload.password.strip()
+            from backend.core.security import DEFAULT_ORGANIZATION_PASSWORDS
+            if cleaned.lower() in {p.lower() for p in DEFAULT_ORGANIZATION_PASSWORDS}:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="This password is not allowed. You cannot keep or reuse the default company password.",
+                )
+            user.hashed_password = hash_password(cleaned)
+            user.token_version = max(1, user.token_version) + 1
 
     # If deactivating user, invalidate active sessions immediately (FRONTEND_SPECS)
     if payload.is_active is not None and payload.is_active != user.is_active:

@@ -38,7 +38,7 @@ class UserCreate(SQLModel):
     name: str
     username: str
     email: str
-    password: str
+    password: Optional[str] = "Welcome@Cortex2026!"
     job_title: str
     role: Role = Role.EMPLOYEE
     department: str
