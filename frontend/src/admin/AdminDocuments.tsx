@@ -33,6 +33,7 @@ export function AdminDocuments() {
   const [logsLoading, setLogsLoading] = useState(false)
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const replaceInput = useRef<HTMLInputElement>(null)
+  const uploadFileInputRef = useRef<HTMLInputElement>(null)
   const replaceTarget = useRef<DocumentRecord | null>(null)
 
   const load = async (nextPage = page, options?: { search?: string; status?: string; department?: string; clearance?: string }) => {
@@ -118,7 +119,107 @@ export function AdminDocuments() {
       {result && <Pagination page={result.page} totalPages={result.total_pages} onChange={(next) => void load(next)} />}
     </section>
     <input ref={replaceInput} type="file" accept=".pdf,.docx,.md,.txt" hidden onChange={(e) => { const file = e.target.files?.[0]; if (file) void replaceDocument(file) }} />
-    {uploadOpen && <Modal title="Add a source document" onClose={() => setUploadOpen(false)}><form className="stack-form" onSubmit={upload}><label>Source file<input type="file" accept=".pdf,.docx,.md,.txt" onChange={(e) => setUploadFile(e.target.files?.[0] || null)} required /></label><label>Title<input value={uploadForm.title} onChange={(e) => setUploadForm((f) => ({ ...f, title: e.target.value }))} placeholder="Leave blank to use filename" /></label><div className="form-grid"><label>Department<input value={uploadForm.department} onChange={(e) => setUploadForm((f) => ({ ...f, department: e.target.value }))} required /></label><label>Clearance<select value={uploadForm.clearance_level} onChange={(e) => setUploadForm((f) => ({ ...f, clearance_level: e.target.value }))}><option>Public</option><option>Internal</option><option>Confidential</option></select></label></div><p className="form-help">The file is stored server-side so it can be safely reindexed later.</p><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setUploadOpen(false)}>Cancel</button><button type="submit" className="primary-button" disabled={!uploadFile || uploading}>{uploading ? 'Uploading…' : 'Upload and index'}</button></div></form></Modal>}
+    {uploadOpen && (
+      <Modal title="Add a source document" onClose={() => setUploadOpen(false)}>
+        <form className="stack-form" onSubmit={upload}>
+          <div>
+            <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text)', display: 'block', marginBottom: 6 }}>Source document file *</span>
+            <input
+              ref={uploadFileInputRef}
+              type="file"
+              accept=".pdf,.docx,.md,.txt"
+              hidden
+              onChange={(e) => {
+                const f = e.target.files?.[0] || null
+                setUploadFile(f)
+                if (f && !uploadForm.title.trim()) {
+                  const cleanName = f.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ')
+                  setUploadForm((prev) => ({ ...prev, title: cleanName }))
+                }
+              }}
+            />
+            {!uploadFile ? (
+              <div
+                className="file-dropzone-button"
+                onClick={() => uploadFileInputRef.current?.click()}
+                style={{
+                  border: '2px dashed var(--border-strong)',
+                  borderRadius: 10,
+                  padding: '24px 16px',
+                  background: 'var(--surface-soft)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 8,
+                  cursor: 'pointer',
+                  transition: 'border-color 0.2s, background 0.2s',
+                }}
+              >
+                <div style={{ width: 42, height: 42, borderRadius: 10, background: 'var(--primary-soft)', color: 'var(--primary)', display: 'grid', placeItems: 'center' }}>
+                  <UploadCloud size={22} />
+                </div>
+                <strong style={{ fontSize: 13, color: 'var(--text)' }}>Choose file to upload</strong>
+                <small style={{ color: 'var(--muted)', fontSize: 11 }}>PDF, DOCX, Markdown, or TXT documents</small>
+              </div>
+            ) : (
+              <div
+                style={{
+                  border: '1px solid var(--border)',
+                  borderRadius: 10,
+                  padding: '12px 14px',
+                  background: 'var(--surface)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                  <div style={{ width: 36, height: 36, borderRadius: 8, background: 'var(--primary-soft)', color: 'var(--primary)', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
+                    <FileText size={18} />
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <strong style={{ fontSize: 12, color: 'var(--text)', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {uploadFile.name}
+                    </strong>
+                    <small style={{ color: 'var(--muted)', fontSize: 11 }}>
+                      {(uploadFile.size / 1024).toFixed(1)} KB
+                    </small>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <button
+                    type="button"
+                    className="secondary-button compact-button"
+                    style={{ fontSize: 11, padding: '3px 8px', height: 26 }}
+                    onClick={() => uploadFileInputRef.current?.click()}
+                  >
+                    Change
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button small danger"
+                    style={{ width: 26, height: 26 }}
+                    onClick={() => {
+                      setUploadFile(null)
+                      if (uploadFileInputRef.current) uploadFileInputRef.current.value = ''
+                    }}
+                    title="Remove file"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+          <label>Title<input value={uploadForm.title} onChange={(e) => setUploadForm((f) => ({ ...f, title: e.target.value }))} placeholder="Leave blank to use filename" /></label>
+          <div className="form-grid"><label>Department<input value={uploadForm.department} onChange={(e) => setUploadForm((f) => ({ ...f, department: e.target.value }))} required /></label><label>Clearance<select value={uploadForm.clearance_level} onChange={(e) => setUploadForm((f) => ({ ...f, clearance_level: e.target.value }))}><option>Public</option><option>Internal</option><option>Confidential</option></select></label></div>
+          <p className="form-help">The file is stored server-side so it can be safely reindexed later.</p>
+          <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setUploadOpen(false)}>Cancel</button><button type="submit" className="primary-button" disabled={!uploadFile || uploading}>{uploading ? 'Uploading…' : 'Upload and index'}</button></div>
+        </form>
+      </Modal>
+    )}
     {logsTarget && <Modal title={`Processing history · ${logsTarget.title}`} onClose={() => setLogsTarget(null)} wide><div className="document-log-list">{logsLoading && <div className="table-loading">Loading processing history…</div>}{!logsLoading && logs.length === 0 && <div className="empty-state compact"><ScrollText size={22} /><p>No processing events have been recorded for this document.</p></div>}{!logsLoading && logs.map((log) => <div className="document-log-row" key={log.id}><span className={`log-status ${log.status.toLowerCase()}`} /><div><div className="document-log-meta"><strong>{log.stage.replace('_', ' ')}</strong><span>{log.status}</span><small>{new Date(log.created_at).toLocaleString()}</small></div><p>{log.message}</p></div></div>)}<Pagination page={logsPage} totalPages={logsTotalPages} onChange={(next) => void openLogs(logsTarget, next)} /></div></Modal>}
     {toast && <div className="toast-message"><span>{toast}</span><button onClick={() => setToast('')}><X size={14} /></button></div>}
   </div>
