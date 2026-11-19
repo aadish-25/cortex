@@ -7,7 +7,7 @@ echo  Starting Cortex Unified Development Environment...
 echo ========================================================
 
 if exist ".venv\Scripts\python.exe" (
-    ".venv\Scripts\python.exe" run.py
+    ".venv\Scripts\python.exe" run.py <nul
 ) else (
-    python run.py
+    python run.py <nul
 )
