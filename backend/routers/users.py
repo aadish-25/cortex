@@ -4,8 +4,8 @@ from typing import List, Optional
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import func
-from sqlmodel import col, or_, select
+from sqlalchemy import case, func
+from sqlmodel import and_, col, or_, select
 
 from backend.core.security import get_current_user, hash_password, require_user_manager
 from backend.db.database import get_db
@@ -118,7 +118,34 @@ async def list_users(
         count_stmt = count_stmt.where(*conditions)
         data_stmt = data_stmt.where(*conditions)
     total = int((await session.execute(count_stmt)).scalar_one() or 0)
-    data_stmt = data_stmt.order_by(col(User.created_at).desc()).offset((page - 1) * page_size).limit(page_size)
+
+    # Prioritize users requiring administrator action/review at the top of directory (Page 1)
+    pending_email_sub = (
+        select(func.count(EmailChangeRequest.id))
+        .where(
+            EmailChangeRequest.user_id == User.id,
+            EmailChangeRequest.status == "pending",
+        )
+        .scalar_subquery()
+    )
+    is_pending_applicant = and_(
+        User.is_active == False,
+        or_(User.department == "Unassigned", User.job_title == "Pending Assignment"),
+    )
+    has_pending_review = case(
+        (pending_email_sub > 0, 1),
+        (is_pending_applicant, 1),
+        else_=0,
+    )
+
+    data_stmt = (
+        data_stmt.order_by(
+            has_pending_review.desc(),
+            col(User.created_at).desc(),
+        )
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
     result = await session.execute(data_stmt)
     users = result.scalars().all()
     return PaginatedResponse[UserRead](

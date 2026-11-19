@@ -369,13 +369,21 @@ export function AdminUsers() {
               {!loading && result?.items.map((person) => {
                 const isApplicant = !person.is_active && (person.department === 'Unassigned' || person.job_title === 'Pending Assignment')
                 const emailReq = emailRequests[person.id]
+                const hasPendingReview = Boolean(isApplicant || emailReq)
                 return (
-                  <tr key={person.id}>
+                  <tr key={person.id} className={hasPendingReview ? 'pending-review-row' : ''}>
                     <td>
                       <div className="person-cell">
                         <span className="user-avatar">{person.name.split(/\s+/).slice(0, 2).map((x) => x[0]).join('').toUpperCase()}</span>
                         <span>
-                          <strong>{person.name}</strong>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <strong>{person.name}</strong>
+                            {hasPendingReview && (
+                              <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--warning)', background: 'var(--warning-soft)', padding: '1px 5px', borderRadius: 4, textTransform: 'uppercase' }}>
+                                Action Required
+                              </span>
+                            )}
+                          </div>
                           <small>{person.email}</small>
                         </span>
                       </div>
@@ -410,14 +418,24 @@ export function AdminUsers() {
                         ) : (
                           <>
                             {emailReq && (
-                              <button
-                                className="secondary-button small"
-                                style={{ minHeight: '30px', padding: '0 8px', fontSize: '11px', color: 'var(--primary)', borderColor: 'var(--primary-line)' }}
-                                onClick={() => void approveEmailRevision(emailReq.id, emailReq.requested_email)}
-                                title={`Approve new email: ${emailReq.requested_email}${emailReq.reason ? ` (${emailReq.reason})` : ''}`}
-                              >
-                                ✓ Accept {emailReq.requested_email}
-                              </button>
+                              <div style={{ display: 'inline-flex', gap: 5 }}>
+                                <button
+                                  className="secondary-button small danger"
+                                  style={{ minHeight: '30px', padding: '0 8px', fontSize: '11px', color: 'var(--danger)', borderColor: 'var(--danger-soft)' }}
+                                  onClick={() => void rejectEmailRevision(emailReq.id)}
+                                  title="Reject email revision request"
+                                >
+                                  ✕ Reject
+                                </button>
+                                <button
+                                  className="secondary-button small"
+                                  style={{ minHeight: '30px', padding: '0 8px', fontSize: '11px', color: 'var(--primary)', borderColor: 'var(--primary-line)' }}
+                                  onClick={() => void approveEmailRevision(emailReq.id, emailReq.requested_email)}
+                                  title={`Approve new email: ${emailReq.requested_email}${emailReq.reason ? ` (${emailReq.reason})` : ''}`}
+                                >
+                                  ✓ Accept {emailReq.requested_email}
+                                </button>
+                              </div>
                             )}
                             <button className="icon-button small" onClick={() => openEdit(person)} title="Edit account">
                               <Pencil size={15} />
