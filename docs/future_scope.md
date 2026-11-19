@@ -231,8 +231,16 @@ Cloudinary credentials and endpoints operate strictly as backend platform infras
 
 ### 2.4 Automated RAG Evaluation Pipeline (Ragas & Optuna Parameter Calibration)
 
+#### Current State vs. Uncalibrated Retrieval
+Currently, Cortex operates with static empirical defaults:
+- Hybrid vector/sparse weight balance ($\alpha = 0.5$)
+- Initial retrieval window ($K = 10$)
+- Cross-encoder reranker admission threshold ($\tau = 0.25$)
+
+**No automated parameter calibration using Optuna has been executed to date.** System tuning has relied on manual heuristic checks. Without systematic Bayesian optimization against ground-truth benchmarks, these default values may leave retrieval quality, chunk diversity, and context precision sub-optimal.
+
 #### The Problem: Silent Retrieval Regressions
-Retrieval augmented generation systems are prone to silent regression: adjusting chunk overlap, changing re-ranking models, or altering system prompt instructions can improve one class of queries while degrading answer faithfulness or context recall on others. Without automated evaluation metrics, performance assessment remains anecdotal and subjective.
+Retrieval augmented generation systems are prone to silent regression: adjusting chunk overlap, changing re-ranking models, or altering system prompt instructions can improve one class of queries while degrading answer faithfulness or context recall on others. Without automated evaluation metrics and optimization loops, performance assessment remains anecdotal and subjective.
 
 #### Planned Architecture & Capabilities
 1. **Ragas Metric Framework Integration**:
@@ -328,3 +336,4 @@ A consolidated roadmap checklist of core features and operational capabilities s
 3. **Background Query Processing:** Ensure that submitting a prompt and switching to another chat does not cancel its execution. Queries should continue processing in the background, with completed responses available when users return to the conversation. *(Refer to [Section 2.5](#25-background-query-processing-decoupled-async-execution--re-attachment))*
 4. **Dedicated Billing & Usage Section:** Introduce a separate Billing & Usage section instead of keeping billing information within the Overview tab. Centralize usage statistics, consumption details, billing information, and related management features in one dedicated section. *(Refer to [Section 1.7](#17-dedicated-billing--usage-section-admin-portal-centralization))*
 5. **Dynamic Knowledge Source Management & Access Control:** Allow administrators to dynamically connect and manage knowledge sources such as Google Drive folders and GitHub repositories, configure which sources are available to different users or teams, and enforce source-level access permissions during retrieval. *(Refer to [Section 2.6](#26-dynamic-knowledge-source-management--access-control-admin-connector-studio))*
+6. **Automated RAG Parameter Calibration via Optuna:** Build and execute an automated parameter calibration pipeline using Optuna Bayesian optimization (TPE) over the 50-pair QA benchmark dataset. Calibrate hybrid retrieval alpha weighting ($\alpha$), initial retrieval depth ($K$), and cross-encoder reranking cutoffs ($\tau$) to maximize Ragas Faithfulness and Context Recall, replacing current uncalibrated empirical defaults. *(Refer to [Section 2.4](#24-automated-rag-evaluation-pipeline-ragas--optuna-parameter-calibration))*
