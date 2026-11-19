@@ -65,11 +65,47 @@ Currently, the Admin "Answer Quality" view offers a binary "Mark Reviewed" butto
 
 ---
 
+### 1.3 Interactive Jira Ticket Canvas / Artifact Panels (Antigravity & ChatGPT Style)
+
+#### The Problem
+Currently, confirmed Jira tickets display a status confirmation card and offer a "View ticket" modal or external Atlassian link. While functional, standard modal dialogs interrupt the conversation stream and do not provide an ambient, persistent workspace.
+
+#### How Antigravity / ChatGPT-Style Artifacts Work
+Modern agentic interfaces decouple chat text from visual artifacts:
+- **Slide-Out Split-Pane Canvas**: Clicking "View ticket" or mentioning an existing ticket key smoothly slides open a dedicated right-hand side panel while keeping the conversation active on the left.
+- **Live Ticket Synchronizer**: The artifact dynamically subscribes to Jira status webhooks (`Open` $\to$ `In Progress` $\to$ `Resolved`), displaying a real-time progress track.
+- **In-Canvas Interactive Actions**:
+  - Add internal comments or additional notes without prompting the LLM.
+  - Drag-and-drop new receipt or screenshot files directly onto the ticket canvas (uploading via Cloudinary).
+  - One-click copy of Jira markdown formatted ticket blocks for Slack/Teams cross-posting.
+
+---
+
 ## 2. Moderate Complexity Scope (Medium-Term Enhancements)
 
 These features involve integrations with external worker pipelines, scheduled cron tasks, or cross-service state synchronization.
 
-### 2.1 Automated Cloud Storage Change Data Capture (CDC)
+### 2.1 Cloudinary Enterprise Cloud Media & Document Storage Architecture
+
+#### Architecture & Multi-Folder Hierarchy
+To support ephemeral cloud container hosts (such as Railway, Render, or AWS ECS), all source documents and user ticket attachments are streamed to Cloudinary under the dedicated root namespace:
+- **`cortex/documents/`**: Enterprise knowledge base source files (PDFs, DOCXs, Markdown). Secured via authenticated delivery and signed URLs so internal intellectual property is never publicly exposed.
+- **`cortex/jira_tickets/`**: User-uploaded receipts, invoices, and diagnostic screenshots attached to Jira drafts.
+
+#### Asset Naming Convention & User Attribution
+To enable instantaneous filtering and ownership attribution, image assets follow the strict schema:
+```
+cortex/jira_tickets/<username>-<YYYYMMDD-HHMMSS>.<ext>
+```
+Example: `employee_eng-20261119-104523.png`
+The substring before the first hyphen is the exact corporate username of the uploader, allowing audit queries and administrative cleanup to filter assets by employee with zero database overhead.
+
+#### Agent Isolation Guardrail
+Cloudinary credentials and endpoints operate strictly as backend platform infrastructure (`backend/services/storage/cloudinary_service.py`). Under no circumstances is Cloudinary exposed as a tool or function declaration to the AI planner or synthesis LLM, preserving architectural boundaries and preventing prompt-injection credential leaks.
+
+---
+
+### 2.2 Automated Cloud Storage Change Data Capture (CDC)
 - **Real-time Webhooks for Cloud Drives**:
   - Connect Google Drive Push Notifications and Microsoft OneDrive Webhooks to the Celery worker queue.
   - Automatically detect when a source document is edited, renamed, or deleted in the cloud drive.
