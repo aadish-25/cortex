@@ -85,7 +85,7 @@ export function AdminUsers() {
     const s = options?.statusFilter ?? statusFilterRef.current
     if (q.trim()) params.set('search', q.trim())
     if (r) params.set('role', r)
-    if (s && s !== 'email_pending') params.set('account_status', s)
+    if (s) params.set('account_status', s)
     try {
       const [data] = await Promise.all([
         api<Page<User>>(`/api/v1/users/?${params}`),
@@ -281,6 +281,26 @@ export function AdminUsers() {
         <button className="primary-button" onClick={openCreate}><UserPlus size={17} /> Add user</button>
       </header>
 
+      {Object.keys(emailRequests).length > 0 && statusFilter !== 'email_pending' && (
+        <div style={{ margin: '0 0 16px', padding: '10px 16px', background: 'var(--warning-soft)', border: '1px solid var(--warning)', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text)', fontSize: 12 }}>
+            <span style={{ fontSize: 16 }}>📧</span>
+            <strong>{Object.keys(emailRequests).length} pending corporate email revision request(s) awaiting review.</strong>
+          </div>
+          <button
+            type="button"
+            className="secondary-button small"
+            style={{ fontSize: 11, padding: '2px 10px', height: 26, background: 'var(--surface)' }}
+            onClick={() => {
+              setStatusFilter('email_pending')
+              void load(1, { statusFilter: 'email_pending' })
+            }}
+          >
+            View Pending Revisions
+          </button>
+        </div>
+      )}
+
       <section className="panel data-panel">
         <div className="table-toolbar">
           <div className="search-field">
@@ -345,8 +365,8 @@ export function AdminUsers() {
             </thead>
             <tbody>
               {loading && <tr><td colSpan={7} className="table-loading">Loading people…</td></tr>}
-              {!loading && (result?.items || []).filter((p) => statusFilter !== 'email_pending' || Boolean(emailRequests[p.id])).length === 0 && <tr><td colSpan={7} className="table-empty">No accounts found.</td></tr>}
-              {!loading && (result?.items || []).filter((p) => statusFilter !== 'email_pending' || Boolean(emailRequests[p.id])).map((person) => {
+              {!loading && result?.items.length === 0 && <tr><td colSpan={7} className="table-empty">No accounts found.</td></tr>}
+              {!loading && result?.items.map((person) => {
                 const isApplicant = !person.is_active && (person.department === 'Unassigned' || person.job_title === 'Pending Assignment')
                 const emailReq = emailRequests[person.id]
                 return (

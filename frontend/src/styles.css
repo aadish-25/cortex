@@ -175,6 +175,7 @@ h1, h2, h3 { font-family: 'Manrope', 'DM Sans', sans-serif; letter-spacing: -.03
 .sidebar-user-button > svg { color: var(--muted); }
 .chevron-down { transform: rotate(180deg); }
 .popover-dismiss { position: fixed; z-index: 49; inset: 0; background: transparent; border: 0; }
+.admin-notification-popover { position: absolute; z-index: 10000; top: calc(100% + 8px); right: 0; width: 360px; max-width: 90vw; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; }
 .user-popover { position: absolute; z-index: 50; right: 0; bottom: 61px; left: 0; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); }
 .user-popover-profile { display: flex; align-items: center; gap: 10px; padding: 2px 2px 10px; }
 .user-popover-profile > div { display: flex; flex-direction: column; min-width: 0; gap: 2px; }

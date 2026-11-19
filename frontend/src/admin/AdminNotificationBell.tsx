@@ -138,121 +138,118 @@ export function AdminNotificationBell() {
       </button>
 
       {open && (
-        <div
-          className="user-popover notification-dropdown"
-          style={{
-            position: 'absolute',
-            right: 0,
-            top: 42,
-            width: 360,
-            maxWidth: '90vw',
-            zIndex: 1000,
-            padding: 0,
-            overflow: 'hidden',
-          }}
-        >
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              padding: '12px 14px',
-              borderBottom: '1px solid var(--border)',
-              background: 'var(--surface-soft)',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Bell size={15} color="var(--primary)" />
-              <strong style={{ fontSize: 13 }}>Workspace Notifications</strong>
+        <>
+          <button
+            type="button"
+            className="popover-dismiss"
+            style={{ zIndex: 9999 }}
+            aria-label="Close notification menu"
+            onClick={() => setOpen(false)}
+          />
+          <div className="admin-notification-popover" style={{ zIndex: 10000 }}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '12px 14px',
+                borderBottom: '1px solid var(--border)',
+                background: 'var(--surface-soft)',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Bell size={15} color="var(--primary)" />
+                <strong style={{ fontSize: 13 }}>Workspace Notifications</strong>
+              </div>
+              <span className="status-pill active" style={{ fontSize: 10 }}>
+                {total} pending
+              </span>
             </div>
-            <span className="status-pill active" style={{ fontSize: 10 }}>
-              {total} pending
-            </span>
-          </div>
 
-          <div style={{ maxHeight: 380, overflowY: 'auto' }}>
-            {data?.items && data.items.length > 0 ? (
-              data.items.map((item) => (
-                <div
-                  key={`${item.type}-${item.id}`}
-                  style={{
-                    padding: '12px 14px',
-                    borderBottom: '1px solid var(--border)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 6,
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-                    <span
-                      style={{
-                        padding: 6,
-                        borderRadius: 6,
-                        background: item.type === 'access_request' ? 'var(--primary-soft)' : 'var(--warning-soft)',
-                        color: item.type === 'access_request' ? 'var(--primary)' : 'var(--warning)',
-                        display: 'flex',
-                        marginTop: 2,
-                      }}
-                    >
-                      {item.type === 'access_request' ? <UserPlus size={14} /> : <Mail size={14} />}
-                    </span>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <p style={{ margin: 0, fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>
-                        {item.title}
-                      </p>
-                      <small style={{ color: 'var(--muted)', fontSize: 11, display: 'block', marginTop: 2 }}>
-                        {item.subtitle}
-                      </small>
-                    </div>
-                  </div>
-
-                  {item.type === 'access_request' && (
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 4 }}>
-                      <button
-                        type="button"
-                        className="primary-button compact-button"
-                        style={{ fontSize: 11, padding: '3px 10px', height: 24 }}
-                        onClick={() => {
-                          setOpen(false)
-                          navigate('/admin/users?account_status=pending')
+            <div style={{ maxHeight: 380, overflowY: 'auto' }}>
+              {data?.items && data.items.length > 0 ? (
+                data.items.map((item) => (
+                  <div
+                    key={`${item.type}-${item.id}`}
+                    style={{
+                      padding: '12px 14px',
+                      borderBottom: '1px solid var(--border)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 6,
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                      <span
+                        style={{
+                          padding: 6,
+                          borderRadius: 6,
+                          background: item.type === 'access_request' ? 'var(--primary-soft)' : 'var(--warning-soft)',
+                          color: item.type === 'access_request' ? 'var(--primary)' : 'var(--warning)',
+                          display: 'flex',
+                          marginTop: 2,
                         }}
                       >
-                        Review Application
-                      </button>
+                        {item.type === 'access_request' ? <UserPlus size={14} /> : <Mail size={14} />}
+                      </span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <p style={{ margin: 0, fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>
+                          {item.title}
+                        </p>
+                        <small style={{ color: 'var(--muted)', fontSize: 11, display: 'block', marginTop: 2 }}>
+                          {item.subtitle}
+                        </small>
+                      </div>
                     </div>
-                  )}
 
-                  {item.type === 'email_request' && item.request_id && (
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 4 }}>
-                      <button
-                        type="button"
-                        className="secondary-button danger compact-button"
-                        style={{ fontSize: 11, padding: '3px 8px', height: 24 }}
-                        disabled={actionLoading === item.request_id}
-                        onClick={() => handleRejectEmail(item.request_id!)}
-                      >
-                        <Trash2 size={12} /> Reject
-                      </button>
-                      <button
-                        type="button"
-                        className="primary-button compact-button"
-                        style={{ fontSize: 11, padding: '3px 10px', height: 24 }}
-                        disabled={actionLoading === item.request_id}
-                        onClick={() => handleApproveEmail(item.request_id!, item.requested_email || '')}
-                      >
-                        <Check size={12} /> Approve
-                      </button>
-                    </div>
-                  )}
+                    {item.type === 'access_request' && (
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 4 }}>
+                        <button
+                          type="button"
+                          className="primary-button compact-button"
+                          style={{ fontSize: 11, padding: '3px 10px', height: 24 }}
+                          onClick={() => {
+                            setOpen(false)
+                            navigate('/admin/users?account_status=pending')
+                          }}
+                        >
+                          Review Application
+                        </button>
+                      </div>
+                    )}
+
+                    {item.type === 'email_request' && item.request_id && (
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 4 }}>
+                        <button
+                          type="button"
+                          className="secondary-button danger compact-button"
+                          style={{ fontSize: 11, padding: '3px 8px', height: 24 }}
+                          disabled={actionLoading === item.request_id}
+                          onClick={() => handleRejectEmail(item.request_id!)}
+                        >
+                          <Trash2 size={12} /> Reject
+                        </button>
+                        <button
+                          type="button"
+                          className="primary-button compact-button"
+                          style={{ fontSize: 11, padding: '3px 10px', height: 24 }}
+                          disabled={actionLoading === item.request_id}
+                          onClick={() => handleApproveEmail(item.request_id!, item.requested_email || '')}
+                        >
+                          <Check size={12} /> Approve
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))
+              ) : (
+                <div style={{ padding: '24px 16px', textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>
+                  All clear! No pending access or email revision requests.
                 </div>
-              ))
-            ) : (
-              <div style={{ padding: '24px 16px', textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>
-                All clear! No pending access or email revision requests.
-              </div>
-            )}
+              )}
+            </div>
           </div>
-        </div>
+        </>
       )}
 
       {toast && (
