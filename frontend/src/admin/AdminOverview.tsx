@@ -83,6 +83,7 @@ export function AdminOverview() {
   ]
   const weeklyData = useMemo(() => buildWeeklyChartData(queries?.daily_counts), [queries?.daily_counts])
   const maxCount = Math.max(1, ...weeklyData.map((item) => item.count))
+  const scaleMax = Math.max(10, Math.ceil(maxCount * 1.25))
   const serviceEntries = Object.entries(health?.services ?? {}) as Array<[string, AdminHealth['services'][string]]>
 
   function serviceBadgeClass(svc: AdminHealth['services'][string]) {
@@ -101,8 +102,40 @@ export function AdminOverview() {
         <div className="service-list">{serviceEntries.map(([name, service]) => <div className="service-row" key={name}><div className="service-name"><span className={`service-status ${serviceBadgeClass(service)}`} /><strong>{name.toUpperCase()}</strong></div><span className={`service-badge ${serviceBadgeClass(service)}`}>{service.status}</span><small>{service.detail}</small></div>)}{!health && <div className="table-loading">{loading ? 'Checking services…' : 'Health data unavailable'}</div>}</div>
         {health?.llm_providers && <div className="provider-health"><p className="eyebrow">MODEL PROVIDER KEYS</p><div>{Object.entries(health.llm_providers).map(([provider, status]) => <span key={provider} className={status === 'CONFIGURED' ? 'provider-configured' : 'provider-missing'}>{provider} · {status === 'CONFIGURED' ? 'Configured' : 'Not configured'}</span>)}</div></div>}
       </section>
-      <section className="panel query-panel"><div className="panel-heading"><div><p className="eyebrow">ACTIVITY</p><h2>Query volume</h2></div><span className="panel-period">Last 7 days</span></div>
-        <div className="bar-chart">{weeklyData.map((item) => <div className={`bar-chart-col ${item.isToday ? 'is-today' : ''}`} key={item.day}><span className="bar-count">{item.count > 0 ? item.count : '0'}</span><div className="bar-track"><div className={`bar-fill ${item.count === 0 ? 'zero-count' : ''}`} style={{ height: `${item.count > 0 ? Math.max(8, (item.count / maxCount) * 100) : 4}%` }} /></div><small className="bar-day">{item.label}</small></div>)}</div>
+      <section className="panel query-panel">
+        <div className="panel-heading">
+          <div><p className="eyebrow">ACTIVITY</p><h2>Query volume</h2></div>
+          <span className="panel-period">Last 7 days</span>
+        </div>
+        <div className="bar-chart-container">
+          <div className="bar-chart-grid">
+            <div className="grid-line" style={{ top: '15%' }}><span>{Math.round(scaleMax * 0.85)}</span></div>
+            <div className="grid-line" style={{ top: '50%' }}><span>{Math.round(scaleMax * 0.5)}</span></div>
+            <div className="grid-line" style={{ top: '85%' }}><span>{Math.round(scaleMax * 0.15)}</span></div>
+          </div>
+          <div className="bar-chart">
+            {weeklyData.map((item) => {
+              const heightPct = item.count > 0 ? Math.min(100, Math.max(6, (item.count / scaleMax) * 100)) : 0
+              return (
+                <div className={`bar-chart-col ${item.isToday ? 'is-today' : ''}`} key={item.day}>
+                  <span className="bar-count">{item.count > 0 ? item.count : '0'}</span>
+                  <div className="bar-slot">
+                    {item.count > 0 ? (
+                      <div
+                        className="bar-column"
+                        style={{ height: `${heightPct}%` }}
+                        title={`${item.count} queries on ${item.label}`}
+                      />
+                    ) : (
+                      <div className="bar-column-zero" title="0 queries" />
+                    )}
+                  </div>
+                  <small className="bar-day">{item.label}</small>
+                </div>
+              )
+            })}
+          </div>
+        </div>
       </section>
     </div>
     <div className="overview-bottom-grid">
