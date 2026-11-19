@@ -362,25 +362,19 @@ async def plan_and_decompose_query(
         planner_instructions = (
             "You are Cortex's master query planner. Understand user intent robustly across English, Hinglish, colloquial phrasing, and typos, "
             "using Recent Conversation Context to resolve pronouns, references, and follow-ups.\n\n"
-            "CRITICAL ROUTING INVARIANTS:\n"
-            "1. ACTION_WORKFLOW: Creating, filing, drafting, or raising workplace Jira tickets, service requests, expense disputes, or leave applications.\n"
-            "   - When the user asks to file, create, raise, log, draft, or open a ticket (e.g. 'rais jira ticket', 'raise ticket', 'file ticket', 'raise it', 'create ticket for this issue', 'create jira ticket'), you MUST classify the task as ACTION_WORKFLOW.\n"
-            "   - NEVER classify a ticket creation or raising request as GITHUB_SEARCH, DRIVE_SEARCH, or INTERNAL_RAG, even if the user is referring to a GitHub issue, repository, or document discussed earlier!\n"
-            "   - ACTION_WORKFLOW directly provisions the interactive ActionCard ticket draft UI for user review on the very first turn.\n"
-            "2. GITHUB_SEARCH: Inspecting, searching, reading, or listing GitHub code, repositories, commits, PRs, or issues.\n"
-            "   - Sub-actions: `github_list_issues`, `github_issues_with_files`, `github_list_prs`, `github_search_code`, or `github_read_file`.\n"
-            "   - When `tool_action` is `github_read_file`, `query` MUST BE ONLY the clean relative file path (e.g. 'backend/auth_service.py'), with NO extra descriptive words or instructions.\n"
-            "   - When a previous turn inspected or referenced a repository code file (e.g. 'backend/auth_service.py') and the user asks a follow-up about that file (e.g. 'Are there any security issues?', 'Any bugs?', 'Explain this code', 'Show full code'), emit GITHUB_SEARCH with `tool_action: 'github_read_file'` and `query` set to that exact clean file path so the file code is retrieved for analysis.\n"
-            "3. INTERNAL_RAG: Company policies, handbooks, SOPs, guidelines, allowances, benefits (e.g. travel/meal allowances, workstation replacement rules). All internal company policy, handbook, and rule inquiries MUST be INTERNAL_RAG. Normalize `query` into a clean search phrase.\n"
-            "4. DRIVE_SEARCH: Google Drive files. Use ONLY when the user explicitly references Google Drive, Drive files, or mentions specific uploaded documents. Set `tool_action` to `drive_list` (`query=\"\"`), `drive_search`, or `drive_read_file` (file name/keyword in `query`). Do NOT route company policy questions to DRIVE_SEARCH.\n"
-            "5. EXTERNAL_WEB: Public internet data (market rates, news, external benchmarks).\n"
-            "6. STRUCTURED_LOOKUP: User's own SQL records (leave balance, their Jira tickets, department heads, profile).\n"
-            "7. ADMIN_OPERATION (Admin role only): `admin_health`, `admin_audit_logs`, `admin_doc_status`, or `admin_reindex`.\n"
-            "8. DIRECT_CHAT: Greetings, conversational chat, assistant capability inquiries, or general questions not requiring enterprise tools.\n\n"
+            "Tools & sub-actions:\n"
+            "- INTERNAL_RAG: Company policies, handbooks, SOPs, guidelines, allowances, benefits (e.g. travel/meal allowances, workstation replacement rules). All internal company policy, handbook, and rule inquiries MUST be INTERNAL_RAG. Normalize `query` into a clean search phrase.\n"
+            "- EXTERNAL_WEB: Public internet data (market rates, news, external benchmarks).\n"
+            "- STRUCTURED_LOOKUP: User's own SQL records (leave balance, their Jira tickets, department heads, profile).\n"
+            "- ACTION_WORKFLOW: Creating, filing, drafting, or raising workplace Jira tickets, service requests, expense disputes, or leave applications. When the user asks to file, create, raise, log, draft, or open a ticket (e.g. 'rais jira ticket', 'raise ticket', 'file ticket', 'raise it', 'create ticket for this issue', 'create jira ticket'), assign task type ACTION_WORKFLOW so the structured ticket draft UI is provisioned immediately.\n"
+            "- GITHUB_SEARCH: Inspecting, searching, reading, or listing GitHub code, repositories, commits, PRs, or issues. Set `tool_action` to `github_list_issues`, `github_issues_with_files`, `github_list_prs`, `github_search_code`, or `github_read_file` (with clean relative file path in `query`). When follow-up questions analyze code previously inspected (e.g. 'Are there any security issues?', 'Any bugs?'), use `github_read_file` with the clean file path.\n"
+            "- DRIVE_SEARCH: Google Drive files. Use when the user references Google Drive or uploaded documents. Set `tool_action` to `drive_list` (`query=\"\"`), `drive_search`, or `drive_read_file` (file name/keyword in `query`). Do NOT route company policy questions to DRIVE_SEARCH.\n"
+            "- ADMIN_OPERATION (Admin role only): `admin_health`, `admin_audit_logs`, `admin_doc_status`, or `admin_reindex`.\n"
+            "- DIRECT_CHAT: Greetings, conversational chat, assistant capability inquiries, or general questions not requiring enterprise tools.\n\n"
             f"Authenticated role: {user_role or 'Unknown'}.\n"
             "Principles:\n"
-            "1. Contextual continuity: When a previous turn was discussing a GitHub repo, code file, or Drive document, follow-up queries exploring that content continue with that tool (e.g. GITHUB_SEARCH or DRIVE_SEARCH).\n"
-            "2. Intent priority for actions: When the user transitions from reviewing content (e.g. a GitHub issue or bug) to asking to raise or file a ticket for it, prioritize ACTION_WORKFLOW so the ticket creation flow starts immediately.\n"
+            "1. Contextual continuity: Use Recent Conversation Context to resolve follow-ups. If previous turns discussed code or Drive documents, follow-ups exploring that content continue with that tool.\n"
+            "2. Intent priority for actions: When the user transitions from reviewing content (e.g. a GitHub issue or bug) to asking to raise, file, or create a ticket for it, prioritize ACTION_WORKFLOW over search so the ticket creation flow starts immediately.\n"
             "3. Multi-intent decomposition: Decompose compound prompts into minimal sequential tasks with `depends_on` only when an action requires upstream output.\n\n"
         )
         prompt = f"{planner_instructions}{history_section}User Prompt: {active_query}\n"
@@ -413,17 +407,6 @@ async def plan_and_decompose_query(
                     tool_action = None if (t.tool_action == ToolAction.NONE or not t.tool_action) else t.tool_action
                     if task_type == PlanTaskType.ADMIN_OPERATION and user_role != "Admin":
                         task_type = PlanTaskType.INTERNAL_RAG
-                        tool_action = None
-
-                    # Defensive Intent Guardrail: If user explicitly asks to raise/create/draft a ticket,
-                    # guarantee task_type is ACTION_WORKFLOW and not misrouted as GITHUB_SEARCH or INTERNAL_RAG
-                    combined_intent_text = f"{query} {active_query} {t.query}".lower()
-                    if re.search(
-                        r"\b(rais|raise|create|open|file|log|draft|submit|apply|make)\b.*?\b(ticket|jira|workflow|reimbursement|expense|dispute|complaint|requisition)\b|"
-                        r"\b(jira\s*ticket|jira\s*draft|rais\s*it|raise\s*it|file\s*it|submit\s*it|create\s*it)\b",
-                        combined_intent_text,
-                    ):
-                        task_type = PlanTaskType.ACTION_WORKFLOW
                         tool_action = None
 
                     parsed_tasks.append(
