@@ -138,6 +138,58 @@ Currently, when Cortex creates Jira tickets via the Atlassian REST API v3, it au
 
 ---
 
+### 1.6 Stop AI Response (Immediate Stream Interruption & AbortController)
+
+#### The Problem
+When the model begins generating a lengthy answer, an unexpected code dump, or a misdirected retrieval synthesis, users are currently forced to wait for full completion or manually refresh the web page. This wastes tokens, delays workflow execution, and causes UI frustration.
+
+#### Planned Architecture & Capabilities
+1. **Frontend Interruption Trigger (`ChatPage.tsx`)**:
+   - Introduce an active state listener: while `isGenerating` is true, the primary "Send" button morphs into a high-visibility square **"Stop"** button.
+   - User trigger immediately calls `abortController.current.abort()`, closing the local HTTP Server-Sent Events (SSE) reader and freezing the UI render at the exact current token.
+2. **Backend Execution Cancellation**:
+   - Wire the FastAPI SSE generator with `await request.is_disconnected()` detection.
+   - Provide an explicit cancellation endpoint `POST /api/v1/chat/conversations/{id}/abort` that broadcasts an abort signal over Redis to terminate any ongoing LLM HTTP connection (Groq / OpenRouter / Gemini).
+   - Prevents downstream token burning and ensures server resources are immediately reclaimed.
+3. **Graceful Partial Persistence**:
+   - Mark the partially streamed assistant message in the database with `status: "interrupted"`, appending a subtle visual indicator: *"[Generation stopped by user]"*.
+
+---
+
+### 1.7 Dedicated Billing & Usage Section (Admin Portal Centralization)
+
+#### The Problem
+Currently, billing details and token metrics are embedded inside the Admin "Overview" tab. As enterprise deployment scales across multiple departments, administrators require a dedicated management surface to analyze token burn rates, audit department-level consumption, and configure model tier budgets.
+
+#### Planned Architecture & Capabilities
+1. **Dedicated Navigation Surface (`/admin/billing-usage`)**:
+   - Move billing and consumption metrics out of the Overview dashboard and into a dedicated **Billing & Usage** sidebar view.
+2. **Centralized Usage Analytics & Cost Breakdown**:
+   - **Multi-Provider Token Split**: Visualize real-time token volume across Groq, OpenRouter, and Gemini.
+   - **Departmental Cost Allocation**: Audit consumption per department (Engineering, HR, Finance) to track cost centers.
+   - **Latency & Error Heatmaps**: Monitor average response latency, provider rate-limit spikes (HTTP 429), and fallback switch frequency.
+3. **Enterprise Quota Management & Budget Alerts**:
+   - Set monthly spending ceilings and automated alerts at 80% and 95% budget utilization thresholds.
+
+---
+
+### 1.8 Audio-to-Text Prompting (Voice Input via Whisper ASR)
+
+#### The Problem
+Typing long, complex enterprise queries—such as detailed incident postmortems, travel itineraries, or nuanced policy questions—is time-consuming and inconvenient on mobile devices or in active meeting environments.
+
+#### Planned Architecture & Capabilities
+1. **Audio Capture UI Component**:
+   - Integrate an intuitive microphone icon beside the chat prompt bar using the HTML5 `MediaRecorder` API with an animated audio waveform.
+   - Support push-to-talk and click-to-record modes with automatic silence detection.
+2. **Ultra-Low-Latency ASR Pipeline**:
+   - **Primary Engine**: Stream audio chunks to Groq's `whisper-large-v3` API endpoint, delivering speech-to-text transcriptions with sub-250ms latency.
+   - **Client-Side Fallback**: Support browser-native Web Speech API (`webkitSpeechRecognition`) for instant, offline local transcription when network connectivity is restricted.
+3. **Seamless Prompt Staging**:
+   - The transcribed text is populated directly into the active prompt textarea, enabling the user to review, edit, or append citations before sending.
+
+---
+
 ## 2. Moderate Complexity Scope (Medium-Term Enhancements)
 
 These features involve integrations with external worker pipelines, scheduled cron tasks, or cross-service state synchronization.
@@ -202,6 +254,42 @@ Retrieval augmented generation systems are prone to silent regression: adjusting
 
 ---
 
+### 2.5 Background Query Processing (Decoupled Async Execution & Re-attachment)
+
+#### The Problem
+Currently, query execution is coupled directly to the client browser's active Server-Sent Events (SSE) connection. If a user submits a prompt involving deep multi-tool research (e.g. cross-referencing internal RAG, Google Drive documents, and GitHub issues) and navigates to another conversation or tab, the browser unmounts the listener, disrupting response generation and losing partial results.
+
+#### Planned Architecture & Capabilities
+1. **Decoupled Backend Task Execution**:
+   - Decouple `DAGOrchestrator` execution from the immediate HTTP request-response cycle.
+   - When a user dispatches a prompt, the backend initiates an asynchronous background worker task (via Celery or an independent `asyncio.create_task`) indexed by `conversation_id` and `message_id`.
+2. **Persistent State Streaming via Redis Pub/Sub**:
+   - The orchestrator streams intermediate planner events, tool actions, and synthesized tokens into a transient Redis Pub/Sub channel while incrementally updating the PostgreSQL `messages` record.
+3. **Seamless Conversation Re-attachment**:
+   - When the user navigates between conversations, the frontend queries `GET /api/v1/chat/conversations/{id}/status`.
+   - If a background generation is still running, the frontend immediately re-subscribes to the active SSE channel and streams the remaining response in real time.
+   - If the generation has completed, the full synthesized answer and citations are loaded directly from the database without re-running the pipeline.
+
+---
+
+### 2.6 Dynamic Knowledge Source Management & Access Control (Admin Connector Studio)
+
+#### The Problem
+Currently, external knowledge sources (such as Google Drive folder IDs and GitHub repositories) are statically declared in `.env` variables (`GOOGLE_DRIVE_ROOT_FOLDER_ID`, `GITHUB_DEFAULT_REPO`). Adding a new departmental shared drive or engineering repository requires updating environment files and redeploying or restarting the server. Furthermore, all users currently share the same hardcoded connector targets regardless of department.
+
+#### Planned Architecture & Capabilities
+1. **Admin Knowledge Connector Studio (`/admin/sources`)**:
+   - A dedicated administrative interface for registering and managing external integration sources dynamically:
+     - **Google Drive**: Connect specific Shared Drives or root folder IDs with custom display labels (e.g., *"HR Shared Drive 2026"*, *"Core Architecture SOWs"*).
+     - **GitHub Repositories**: Connect multiple repositories (`aadish-25/cortex-testing`, `cortex-org/infrastructure`) with default branch and path filters.
+     - **Future Connectors**: Dynamically link Confluence spaces, Notion workspaces, or Jira Service Desks.
+2. **Granular Source-Level Access Control & RBAC**:
+   - Associate each registered knowledge source with authorized user departments (`Engineering`, `HR`, `Finance`, `Executive`) and clearance tiers (`Public`, `Internal`, `Confidential`, `Restricted`).
+3. **Scoped Retrieval Filtering**:
+   - During query planning, `dag_orchestrator.py` queries the active user's permissions and only dispatches searches against knowledge sources that the user is explicitly authorized to view, preventing cross-department information leakage at the connector boundary.
+
+---
+
 ## 3. High Complexity & Architectural Scope (Long-Term Deep Tech)
 
 These features represent significant architectural endeavors involving advanced visualization, enterprise identity federation, or distributed agent orchestration.
@@ -228,3 +316,15 @@ These features represent significant architectural endeavors involving advanced 
 - **Multi-Agent Deep Research**:
   - Fan out research tasks to multiple subagents running in parallel across vector memory, web sources, and enterprise databases.
   - Synthesize cross-document conflict reports (e.g. "Policy document A states X, but HR memo B states Y").
+
+---
+
+## 4. Future Scope / To Be Done (TBD)
+
+A consolidated roadmap checklist of core features and operational capabilities slated for upcoming sprints:
+
+1. **Audio-to-Text Prompting:** Add voice input functionality, allowing users to submit prompts through speech, which are transcribed into text and processed by Cortex. *(Refer to [Section 1.8](#18-audio-to-text-prompting-voice-input-via-whisper-asr))*
+2. **Stop AI Response:** Introduce a dedicated Stop button that allows users to interrupt an ongoing AI response or generation immediately. *(Refer to [Section 1.6](#16-stop-ai-response-immediate-stream-interruption--abortcontroller))*
+3. **Background Query Processing:** Ensure that submitting a prompt and switching to another chat does not cancel its execution. Queries should continue processing in the background, with completed responses available when users return to the conversation. *(Refer to [Section 2.5](#25-background-query-processing-decoupled-async-execution--re-attachment))*
+4. **Dedicated Billing & Usage Section:** Introduce a separate Billing & Usage section instead of keeping billing information within the Overview tab. Centralize usage statistics, consumption details, billing information, and related management features in one dedicated section. *(Refer to [Section 1.7](#17-dedicated-billing--usage-section-admin-portal-centralization))*
+5. **Dynamic Knowledge Source Management & Access Control:** Allow administrators to dynamically connect and manage knowledge sources such as Google Drive folders and GitHub repositories, configure which sources are available to different users or teams, and enforce source-level access permissions during retrieval. *(Refer to [Section 2.6](#26-dynamic-knowledge-source-management--access-control-admin-connector-studio))*
