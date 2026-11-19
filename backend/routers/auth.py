@@ -161,7 +161,7 @@ async def get_me(current_user: User = Depends(get_current_user)):
 
 
 class ChangePasswordRequest(BaseModel):
-    current_password: str
+    current_password: Optional[str] = None
     new_password: str = Field(min_length=10, max_length=128)
 
 
@@ -174,12 +174,17 @@ async def change_password(
     """
     Allow an authenticated user to change their password.
     Blocks keeping or reusing the standard organization default password.
+    If the user currently has a default organization password (onboarding),
+    current_password is not required.
     """
-    if not verify_password(payload.current_password, current_user.hashed_password):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Current password is incorrect.",
-        )
+    is_onboarding = is_default_password(current_user.hashed_password)
+
+    if not is_onboarding:
+        if not payload.current_password or not verify_password(payload.current_password, current_user.hashed_password):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Current password is required and must be correct.",
+            )
 
     cleaned_new = payload.new_password.strip()
     if cleaned_new.lower() in {p.lower() for p in DEFAULT_ORGANIZATION_PASSWORDS}:
@@ -188,10 +193,10 @@ async def change_password(
             detail="This password is not allowed. You cannot keep or reuse the default company password. Please choose a unique personal password.",
         )
 
-    if cleaned_new == payload.current_password.strip():
+    if verify_password(cleaned_new, current_user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Your new password cannot be the same as your current password.",
+            detail="Your new password cannot be the same as your current default password.",
         )
 
     current_user.hashed_password = hash_password(cleaned_new)

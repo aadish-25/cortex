@@ -48,7 +48,8 @@ async def test_inspect_system_health_all_up(async_session_factory):
         mock_qdrant.get_collections.return_value = coll_mock
 
         with patch("backend.services.admin.admin_service.get_redis_client", return_value=mock_redis), \
-             patch("backend.db.qdrant.get_qdrant_client", return_value=mock_qdrant):
+             patch("backend.db.qdrant.get_qdrant_client", return_value=mock_qdrant), \
+             patch("backend.services.admin.admin_service._probe_celery", return_value={"status": "UP", "workers": 1, "worker_nodes": ["celery@node1"]}):
             health = await inspect_system_health(session)
 
             assert health["overall"] == "UP"
@@ -70,7 +71,8 @@ async def test_inspect_system_health_redis_degraded(async_session_factory):
         mock_qdrant.get_collections.return_value = coll_mock
 
         with patch("backend.services.admin.admin_service.get_redis_client", return_value=mock_redis), \
-             patch("backend.db.qdrant.get_qdrant_client", return_value=mock_qdrant):
+             patch("backend.db.qdrant.get_qdrant_client", return_value=mock_qdrant), \
+             patch("backend.services.admin.admin_service._probe_celery", return_value={"status": "UP", "workers": 1, "worker_nodes": ["celery@node1"]}):
             health = await inspect_system_health(session)
 
             assert health["overall"] == "DEGRADED"

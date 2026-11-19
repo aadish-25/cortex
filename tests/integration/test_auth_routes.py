@@ -92,3 +92,74 @@ async def test_api_logout_clears_cookie():
         )
         assert logout_res.status_code == 200
         assert logout_res.json()["message"] == "Logged out successfully"
+
+
+@pytest.mark.asyncio
+async def test_change_password_onboarding_flow():
+    import uuid
+    from backend.db.database import async_session
+    from backend.models.user import User
+    from backend.models.enums import Role, ClearanceLevel
+    from backend.core.security import hash_password, create_access_token
+
+    test_username = f"onboard_{uuid.uuid4().hex[:8]}"
+    async with async_session() as session:
+        user = User(
+            name="Onboard Tester",
+            username=test_username,
+            email=f"{test_username}@cortex.test",
+            job_title="Tester",
+            hashed_password=hash_password("Welcome@Cortex2026!"),
+            role=Role.EMPLOYEE,
+            department="Engineering",
+            clearance_level=ClearanceLevel.INTERNAL,
+            is_active=True,
+            token_version=1,
+        )
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+        user_id = user.id
+
+    token = create_access_token({"sub": str(user_id), "token_version": 1})
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        # Step 1: /me indicates must_change_password is True
+        me_res = await client.get("/api/v1/auth/me", headers=headers)
+        assert me_res.status_code == 200
+        assert me_res.json()["must_change_password"] is True
+
+        # Step 2: Attempt with default password is rejected
+        bad_res = await client.post(
+            "/api/v1/auth/change-password",
+            json={"new_password": "Welcome@Cortex2026!"},
+            headers=headers,
+        )
+        assert bad_res.status_code == 400
+        assert "default company password" in bad_res.json()["detail"].lower()
+
+        # Step 3: Successfully change password WITHOUT providing current_password (onboarding flow)
+        ok_res = await client.post(
+            "/api/v1/auth/change-password",
+            json={"new_password": "MySuperSecretPersonalPass2026!"},
+            headers=headers,
+        )
+        assert ok_res.status_code == 200
+        assert ok_res.json()["must_change_password"] is False
+
+        # Step 4: /me now confirms must_change_password is False
+        me_res2 = await client.get("/api/v1/auth/me", headers=headers)
+        assert me_res2.status_code == 200
+        assert me_res2.json()["must_change_password"] is False
+
+        # Step 5: Subsequent change requires current_password now that onboarding is finished
+        subsequent_bad = await client.post(
+            "/api/v1/auth/change-password",
+            json={"new_password": "AnotherNewPassword123!"},
+            headers=headers,
+        )
+        assert subsequent_bad.status_code == 400
+        assert "current password" in subsequent_bad.json()["detail"].lower()
+
+
