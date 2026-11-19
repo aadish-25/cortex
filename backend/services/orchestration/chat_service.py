@@ -14,7 +14,7 @@ from backend.core.config import settings
 from backend.db.database import async_session
 from backend.core.evidence_tokens import create_evidence_token
 from backend.db.redis import redis_manager
-from backend.models.chat import ChatMessage, ChatRole, Conversation, Message
+from backend.models.chat import ChatMessage, ChatRole, Conversation, Message, PlanTaskType
 from backend.models.query_quality import QueryQualityLog
 from backend.models.user import User
 from backend.services.memory.command_detector import is_trivial_message

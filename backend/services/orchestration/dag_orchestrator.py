@@ -1,6 +1,7 @@
 import asyncio
 from dataclasses import dataclass, field
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from qdrant_client import QdrantClient
@@ -40,6 +41,7 @@ async def execute_task(
     user: User,
     scoped_upstream_context: Dict[int, Any],
     retrieval_top_k: int = 5,
+    history: Optional[List[ChatMessage]] = None,
 ) -> tuple[Any, List[str]]:
     """
     Executes a single sub-task with strict context isolation (Decision D24).
@@ -202,7 +204,28 @@ async def execute_task(
                 if repo_files:
                     gh_result["repo_files"] = repo_files
         elif action == ToolAction.GITHUB_READ_FILE:
-            gh_result = await github_service.get_file_contents(path=task.query.strip())
+            raw_path = task.query.strip()
+            # Extract clean file path if query contains surrounding natural language
+            # e.g., "security vulnerabilities in backend/auth_service.py" -> "backend/auth_service.py"
+            path_match = re.search(
+                r"((?:[\w\-.]+/)*[\w\-.]+\.(?:py|ts|js|jsx|tsx|json|go|rs|md|txt|sql|html|css|yaml|yml|sh|env))",
+                raw_path,
+                re.IGNORECASE,
+            )
+            clean_path = path_match.group(1) if path_match else raw_path
+
+            # If no clean path was found or path lacks file extension/slash, search conversation history for recently inspected repo files
+            if ("." not in clean_path or "/" not in clean_path) and history:
+                recent_history_text = " ".join(m.content for m in history[-4:])
+                hist_matches = re.findall(
+                    r"((?:[\w\-.]+/)+[\w\-.]+\.(?:py|ts|js|jsx|tsx|json|go|rs|md|txt|sql|html|css|yaml|yml|sh|env))",
+                    recent_history_text,
+                    re.IGNORECASE,
+                )
+                if hist_matches:
+                    clean_path = sorted(hist_matches, key=lambda p: ("/" in p, len(p)), reverse=True)[0]
+
+            gh_result = await github_service.get_file_contents(path=clean_path)
             citations = [gh_result["html_url"]] if gh_result.get("html_url") else []
         else:
             gh_result = await github_service.search_code(query=task.query)
@@ -223,7 +246,6 @@ async def execute_task(
     # PRIMARY: Dispatch on LLM-emitted `task.tool_action` ('drive_list', 'drive_search', 'drive_read_file').
     # FALLBACK (only when tool_action is None, e.g. offline/unit test): regex/keyword heuristic.
     elif task.type == PlanTaskType.DRIVE_SEARCH:
-        import re
         from backend.services.integrations.google_drive_service import google_drive_service
         q_raw = (task.query or "").strip()
         action = task.tool_action
@@ -398,7 +420,10 @@ def synthesis_join_node(
                     f"No file named '{output.get('query')}' was found in the connected Google Drive folder.{avail_note}"
                 )
             elif output.get("content"):  # File content read
-                response_sections.append(f"### Document Content: {output.get('name') or output.get('id')}\n```\n{output['content'][:6000]}\n```")
+                file_label = output.get("path") or output.get("name") or output.get("id") or "File"
+                response_sections.append(f"### Document Content: {file_label}\n```\n{output['content'][:6000]}\n```")
+            elif output.get("status") in ("ERROR", "RATE_LIMITED"):
+                response_sections.append(f"### Tool Execution Notice\n{output.get('message', 'Service notice occurred.')}")
             else:
                 response_sections.append(output.get("message", ""))
 
@@ -455,9 +480,9 @@ async def orchestrate_dag_execution(
         upstream = {dep_id: task_outputs[dep_id] for dep_id in task.depends_on}
         if layer_size > 1:
             async with async_session() as isolated_session:
-                out, cites = await execute_task(task, client, isolated_session, user, upstream, retrieval_top_k=retrieval_top_k)
+                out, cites = await execute_task(task, client, isolated_session, user, upstream, retrieval_top_k=retrieval_top_k, history=history)
         else:
-            out, cites = await execute_task(task, client, session, user, upstream, retrieval_top_k=retrieval_top_k)
+            out, cites = await execute_task(task, client, session, user, upstream, retrieval_top_k=retrieval_top_k, history=history)
         return task.id, out, cites
 
     for layer in layers:
