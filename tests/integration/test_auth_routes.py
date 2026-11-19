@@ -139,10 +139,18 @@ async def test_change_password_onboarding_flow():
         assert bad_res.status_code == 400
         assert "default company password" in bad_res.json()["detail"].lower()
 
-        # Step 3: Successfully change password WITHOUT providing current_password (onboarding flow)
+        # Step 2b: Attempt with 7 characters is rejected (min length is 8)
+        short_res = await client.post(
+            "/api/v1/auth/change-password",
+            json={"new_password": "Short1!"},
+            headers=headers,
+        )
+        assert short_res.status_code == 422
+
+        # Step 3: Successfully change password WITHOUT providing current_password (onboarding flow, 8-char password)
         ok_res = await client.post(
             "/api/v1/auth/change-password",
-            json={"new_password": "MySuperSecretPersonalPass2026!"},
+            json={"new_password": "Pass1234"},
             headers=headers,
         )
         assert ok_res.status_code == 200

@@ -10,6 +10,7 @@ import { Modal } from '../components/Modal'
 import { SourcesDrawer } from '../components/SourcesDrawer'
 import { ThemeButton, useTheme } from '../components/ThemeToggle'
 import { AdminNotificationBell } from '../admin/AdminNotificationBell'
+import { safeRandomUUID } from '../lib/uuid'
 
 interface MemoryEventData {
   actions: string[]
@@ -766,8 +767,8 @@ export function ChatPage() {
     const clean = text.trim()
     if (!clean || isStreaming) return
     const now = new Date().toISOString()
-    const assistantId = crypto.randomUUID()
-    const userMessage: UIMessage = { id: crypto.randomUUID(), conversation_id: conversationId || '', sender: 'user', content: clean, variant_index: 1, created_at: now }
+    const assistantId = safeRandomUUID()
+    const userMessage: UIMessage = { id: safeRandomUUID(), conversation_id: conversationId || '', sender: 'user', content: clean, variant_index: 1, created_at: now }
     const assistantMessage: UIMessage = { id: assistantId, conversation_id: conversationId || '', sender: 'assistant', content: '', variant_index: 1, created_at: now, streaming: true, steps: [] }
     setMessages((current) => [...current, userMessage, assistantMessage])
     setInput('')
@@ -776,7 +777,7 @@ export function ChatPage() {
 
   async function regenerate(message: UIMessage, customInstruction?: string) {
     if (isStreaming) return
-    const assistantId = crypto.randomUUID()
+    const assistantId = safeRandomUUID()
     const placeholder: UIMessage = { ...message, id: assistantId, content: '', streaming: true, error: undefined, interrupted: false, variant_index: message.variant_index + 1, steps: [], suggestions: undefined }
     setMessages((current) => [...current, placeholder])
     await startStream(`/api/v1/chat/messages/${message.id}/regenerate`, {

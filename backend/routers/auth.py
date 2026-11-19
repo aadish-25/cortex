@@ -36,7 +36,7 @@ class RegisterRequest(BaseModel):
     last_name: Optional[str] = Field(default=None, min_length=1, max_length=60)
     email: str = Field(min_length=5, max_length=254)
     username: Optional[str] = Field(default=None, min_length=3, max_length=60, pattern=r"^[A-Za-z0-9_.-]+$")
-    password: Optional[str] = Field(default=None, min_length=10, max_length=128)
+    password: Optional[str] = Field(default=None, min_length=8, max_length=128)
     job_title: Optional[str] = Field(default=None, min_length=2, max_length=120)
     department: Optional[str] = Field(default=None, min_length=2, max_length=80)
 
@@ -162,7 +162,7 @@ async def get_me(current_user: User = Depends(get_current_user)):
 
 class ChangePasswordRequest(BaseModel):
     current_password: Optional[str] = None
-    new_password: str = Field(min_length=10, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
 
 
 @router.post("/change-password")

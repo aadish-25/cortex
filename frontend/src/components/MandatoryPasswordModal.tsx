@@ -23,7 +23,7 @@ export function MandatoryPasswordModal() {
 
   const trimmedNew = newPassword.trim()
   const isDefaultAttempt = DISALLOWED_DEFAULT_PASSWORDS.includes(trimmedNew.toLowerCase())
-  const hasMinLength = trimmedNew.length >= 10
+  const hasMinLength = trimmedNew.length >= 8
   const isMatch = trimmedNew.length > 0 && confirmPassword.length > 0 && trimmedNew === confirmPassword
   const canSubmit = hasMinLength && !isDefaultAttempt && isMatch && !loading
 
@@ -32,7 +32,7 @@ export function MandatoryPasswordModal() {
     setError('')
 
     if (!hasMinLength) {
-      setError('New password must be at least 10 characters.')
+      setError('New password must be at least 8 characters.')
       return
     }
 
@@ -173,8 +173,8 @@ export function MandatoryPasswordModal() {
                 type={showNewPassword ? 'text' : 'password'}
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="At least 10 characters"
-                minLength={10}
+                placeholder="At least 8 characters"
+                minLength={8}
                 required
                 style={{
                   width: '100%',
@@ -230,7 +230,7 @@ export function MandatoryPasswordModal() {
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 placeholder="Re-type new personal password"
-                minLength={10}
+                minLength={8}
                 required
                 style={{
                   width: '100%',
@@ -288,7 +288,7 @@ export function MandatoryPasswordModal() {
               }}
             >
               {hasMinLength ? <Check size={13} /> : <span style={{ width: 13, textAlign: 'center' }}>•</span>}
-              <span>At least 10 characters</span>
+              <span>At least 8 characters</span>
             </div>
             <div
               style={{
