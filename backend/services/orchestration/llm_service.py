@@ -465,11 +465,19 @@ class LLMService:
 
                     choice = response.choices[0]
                     raw_content = getattr(choice.message, "content", "") or "{}"
+                    raw_content_clean = raw_content.strip()
 
-                    if raw_content.startswith("```"):
-                        raw_content = re.sub(r"^```(?:json)?\n|\n```$", "", raw_content.strip())
+                    if "```" in raw_content_clean:
+                        raw_content_clean = re.sub(r"^```(?:json)?\s*\n?|\n?```$", "", raw_content_clean).strip()
 
-                    parsed = response_model.model_validate_json(raw_content)
+                    try:
+                        parsed = response_model.model_validate_json(raw_content_clean)
+                    except Exception:
+                        json_match = re.search(r"(\{.*\})", raw_content_clean, re.DOTALL)
+                        if json_match:
+                            parsed = response_model.model_validate_json(json_match.group(1))
+                        else:
+                            raise
 
                     # Log to dedicated test/general LLM interaction log file
                     log_llm_interaction(

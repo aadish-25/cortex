@@ -187,24 +187,19 @@ async def rewrite_query(
     if not history:
         return query, False
 
-    # 2. Strict Pronoun/Anaphora Trigger Guard (Decision D16)
-    # If the user query is already self-contained with no relational anaphora, bypass rewriting
-    if not detect_anaphora_or_pronoun(query):
-        return query, False
-
-    # 3. Targeted 2-Turn Window (Decision D16: strictly last 2 turns = max 4 messages)
+    # 2. Targeted 2-Turn Window (strictly last 2 turns = max 4 messages)
     conversation_context = format_conversation_history(history, max_turns=2, summary=summary)
     if not conversation_context:
         return query, False
 
-    # 4. Primary Path: LiteLLM Gateway
+    # 3. PRIMARY PATH: LLM Gateway (FIRST IS ALWAYS LLM — No regex gating!)
     if llm_service.is_configured():
         prompt = (
             "You are an expert conversational query rewriter.\n"
             "Given the conversation history and the user's latest follow-up question:\n"
-            "1. Determine whether the query references past conversation, pronouns ('it', 'that', 'those'), or missing context in English or Hinglish.\n"
+            "1. Determine whether the query references past conversation, pronouns ('it', 'that', 'those'), previous tools (GitHub, Drive, Jira, HR), or missing context in English or Hinglish.\n"
             "2. Rewrite the user's question into a self-contained, standalone question resolving all pronouns and missing entities.\n"
-            "3. If it is general chit-chat, identify it as chit-chat and do not alter the query.\n\n"
+            "3. If it is general chit-chat or already a fully self-contained question, do not alter the query.\n\n"
             f"Conversation History (Last 2 Turns):\n{conversation_context}\n\n"
             f"User Follow-up Question: {query}\n"
         )
@@ -218,14 +213,15 @@ async def rewrite_query(
                 return parsed.rewritten_query.strip(), True
             return query, False
         except Exception as exc:
-            logger.warning("LLM query rewriting failed, falling back to heuristic fusion: %s", exc)
+            logger.warning("LLM query rewriting failed across providers, falling back to heuristic fusion: %s", exc)
 
-    # 5. Deterministic heuristic fallback (when offline or no API key configured)
-    recent_turns = extract_recent_history_window(history, max_messages=4)
-    last_user_msg = next((m for m in reversed(recent_turns) if m.role == ChatRole.USER), None)
-    if last_user_msg:
-        heuristic_query = f"{query} (in context of: {last_user_msg.content})"
-        return heuristic_query, True
+    # 4. Emergency Offline / Error Fallback (ONLY when all LLM providers failed or offline)
+    if detect_anaphora_or_pronoun(query):
+        recent_turns = extract_recent_history_window(history, max_messages=4)
+        last_user_msg = next((m for m in reversed(recent_turns) if m.role == ChatRole.USER), None)
+        if last_user_msg:
+            heuristic_query = f"{query} (in context of: {last_user_msg.content})"
+            return heuristic_query, True
 
     return query, False
 
@@ -364,24 +360,25 @@ async def plan_and_decompose_query(
             else ""
         )
         planner_instructions = (
-            "You are Cortex's query planner. Understand the user's true intent across English, Hinglish, slang, and typos, "
-            "using Recent Conversation Context to resolve references and infer which source/tool a follow-up belongs to.\n\n"
+            "You are Cortex's master query planner. You must understand the user's true intent across English, Hinglish, slang, and typos, "
+            "using Recent Conversation Context to resolve references and infer which tool or action a prompt belongs to.\n\n"
             "Tools & sub-actions:\n"
             "- INTERNAL_RAG: Company policies, handbooks, SOPs, compliance docs. Normalize `query` into a clean, spell-corrected search phrase.\n"
             "- EXTERNAL_WEB: Public internet data (market rates, news, external benchmarks).\n"
             "- STRUCTURED_LOOKUP: User's own SQL records (leave balance, their Jira tickets, department heads, profile).\n"
             "- ACTION_WORKFLOW: Raising formal workplace Jira tickets/requests (IT, HR, Finance). "
-            "CRITICAL: If the user asks to raise, create, file, log, or draft a Jira ticket (e.g. 'rais jira ticket', 'raise ticket', 'create ticket for this', 'file ticket'), "
-            "ALWAYS plan an ACTION_WORKFLOW task directly so the structured ActionCard UI draft is generated on the first turn. DO NOT plan an informational chat response asking if they want a ticket.\n"
-            "- GITHUB_SEARCH: Repository code, issues, PRs, or opening a repo file. Set `tool_action` to `github_list_issues`, `github_issues_with_files`, `github_list_prs`, `github_search_code`, or `github_read_file` (with file path in `query`).\n"
+            "CRITICAL INVARIANT: Any request to raise, create, file, log, or draft a Jira ticket (even if referring to a GitHub issue or repo, e.g. 'rais jira ticket', 'raise ticket', 'create ticket for this', 'file ticket', 'rais it') "
+            "MUST ALWAYS be assigned task type ACTION_WORKFLOW on the very first turn so the structured ActionCard UI draft is provisioned immediately. "
+            "NEVER assign GITHUB_SEARCH or INTERNAL_RAG when creating or drafting a ticket!\n"
+            "- GITHUB_SEARCH: Inspecting repository code, issues, PRs, or opening a repo file. Use ONLY when searching, reading, or inspecting GitHub — NEVER when creating a Jira ticket! Set `tool_action` to `github_list_issues`, `github_issues_with_files`, `github_list_prs`, `github_search_code`, or `github_read_file` (with file path in `query`).\n"
             "- DRIVE_SEARCH: Google Drive files. Set `tool_action` to `drive_list` (`query=\"\"`), `drive_search`, or `drive_read_file` (exact file name/keyword in `query`).\n"
             "- ADMIN_OPERATION (Admin role only): `admin_health`, `admin_audit_logs`, `admin_doc_status`, or `admin_reindex`.\n"
             "- DIRECT_CHAT: Greetings, general conversation, assistant capability questions, or personal advice/questions not requiring enterprise tools.\n\n"
             f"Authenticated role: {user_role or 'Unknown'}.\n"
             "Principles:\n"
-            "1. Contextual continuity: When the conversation was just discussing a GitHub repository or code file, follow-up questions about 'security issues', 'vulnerabilities', 'bugs', 'functions', 'code', or 'PRs' belong to GITHUB_SEARCH for that repository/file — NOT INTERNAL_RAG!\n"
+            "1. Contextual continuity: When the conversation was just discussing a GitHub repository or code file, follow-up questions about 'security issues', 'vulnerabilities', 'bugs', 'functions', 'code', or 'PRs' belong to GITHUB_SEARCH for that repository/file — NOT INTERNAL_RAG. HOWEVER, if the user asks to RAISE, CREATE, OR DRAFT A JIRA TICKET for an issue or bug, that is ALWAYS ACTION_WORKFLOW — NEVER GITHUB_SEARCH!\n"
             "2. When the conversation was just searching or reading a Google Drive document, follow-up questions about that document belong to DRIVE_SEARCH — NOT INTERNAL_RAG!\n"
-            "3. Action immediacy: If the user says 'rais jira ticket' or 'raise ticket' about an issue or request just discussed, plan ACTION_WORKFLOW directly.\n"
+            "3. Immediate Action Provisioning: When the user asks to raise a Jira ticket or file a request based on an issue or topic just discussed, plan ACTION_WORKFLOW directly for that issue/request — NEVER GITHUB_SEARCH or INTERNAL_RAG!\n"
             "4. Decompose multi-intent prompts into minimal tasks with `depends_on` only where an action requires upstream output.\n\n"
         )
         prompt = f"{planner_instructions}{history_section}User Prompt: {active_query}\n"
@@ -431,9 +428,11 @@ async def plan_and_decompose_query(
                     was_rewritten=was_rewritten,
                 )
         except Exception as exc:
-            logger.warning("LLM DAG decomposition failed, falling back to offline heuristic: %s", exc)
+            logger.error("LLM DAG decomposition failed across all providers (%s). Falling back to offline heuristic.", exc)
 
-    # Step 3 (OFFLINE / ERROR FALLBACK ONLY): Heuristic routing when LLM is unavailable
+    # Step 3 (EMERGENCY OFFLINE / ERROR FALLBACK ONLY):
+    # This path is ONLY reached if ALL configured LLM providers and keys failed!
+    logger.warning("EMERGENCY FALLBACK: Operating in offline heuristic mode for query: %s", active_query)
     if user_role == "Admin":
         admin_intent = re.search(
             r"\b(system health|service health|infrastructure health|health of|audit logs?|audit trail|reindex|re-index|retry ingestion|document status|indexing status|redis status|qdrant status|postgres status|status of (?:redis|qdrant|postgres|database|system))\b",

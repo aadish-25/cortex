@@ -136,3 +136,53 @@ def test_format_conversation_history_with_compaction():
     assert "[Prior Conversation Summary]: User is an Engineering manager discussing hardware provisioning." in formatted
     assert "User: Can contractors use MacBook Pro?" in formatted
     assert "Assistant: Contractors are issued standard ThinkPads." in formatted
+
+
+@pytest.mark.asyncio
+async def test_github_followup_security_issues_continuity():
+    """
+    Verifies that follow-up questions about security issues or bugs in a GitHub-focused
+    conversation are routed to GITHUB_SEARCH (resolving context via LLM) rather than INTERNAL_RAG.
+    """
+    history = [
+        ChatMessage(role=ChatRole.USER, content="okey so i want u to insepct the repository code for me"),
+        ChatMessage(
+            role=ChatRole.ASSISTANT,
+            content=(
+                "Based on the retrieved context, I have inspected the repository `aadish-25/cortex-testing` and found the following file:\n\n"
+                "*   **File:** `auth_service.py`\n"
+                "*   **Path:** `backend/auth_service.py`\n"
+                "*   **Link:** [View on GitHub](https://github.com/aadish-25/cortex-testing/blob/1cdf2e314d4c8350cced5d35e33c8ef274a1bc15/backend/auth_service.py)\n[1]"
+            ),
+        ),
+    ]
+    plan = await plan_and_decompose_query("Are there any security issues?", history=history, user_role="Engineering")
+    assert len(plan.tasks) >= 1
+    # First check is strictly LLM and must resolve to GITHUB_SEARCH, never INTERNAL_RAG
+    assert plan.tasks[0].type == PlanTaskType.GITHUB_SEARCH
+    assert "auth_service.py" in plan.tasks[0].query or "aadish-25" in plan.tasks[0].query or "security" in plan.tasks[0].query.lower()
+
+
+@pytest.mark.asyncio
+async def test_action_workflow_first_turn_immediacy():
+    """
+    Verifies that requesting to raise/create a Jira ticket (e.g. 'rais jira ticket')
+    directly plans an ACTION_WORKFLOW task on the very first turn so the ActionCard UI
+    is provisioned immediately without intermediate chat deflection.
+    """
+    history = [
+        ChatMessage(role=ChatRole.USER, content="githubnissues page"),
+        ChatMessage(
+            role=ChatRole.ASSISTANT,
+            content=(
+                "Based on the retrieved context, here are the open GitHub issues for the `aadish-25/cortex-testing` repository:\n\n"
+                "*   **Issue #3: [Tech Debt] Tune PostgreSQL database pool size and idle connection timeout**\n"
+                "*   **Issue #2: [Feature] Immediate JWT session revocation via token_version**\n"
+                "*   **Issue #1: [Bug] Stripe webhook signature verification fails on duplicate events**\n[1]"
+            ),
+        ),
+    ]
+    plan = await plan_and_decompose_query("rais jira ticket", history=history, user_role="Engineering")
+    assert len(plan.tasks) >= 1
+    # Must immediately plan ACTION_WORKFLOW
+    assert plan.tasks[0].type == PlanTaskType.ACTION_WORKFLOW

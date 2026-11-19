@@ -627,6 +627,13 @@ class ChatService:
         full_assistant_text = ""
         generation_complete = False  # F6: track clean vs interrupted generation
 
+        # Check if the execution plan involved actions or external tools (non-document RAG)
+        has_action_task = any(t.type == PlanTaskType.ACTION_WORKFLOW for t in orch_res.plan.tasks)
+        has_non_rag_task = any(
+            t.type in (PlanTaskType.ACTION_WORKFLOW, PlanTaskType.GITHUB_SEARCH, PlanTaskType.DRIVE_SEARCH, PlanTaskType.STRUCTURED_LOOKUP, PlanTaskType.ADMIN_OPERATION)
+            for t in orch_res.plan.tasks
+        )
+
         # Ensure ActionDrafts are naturally explained rather than triggering low confidence fallback
         if orch_res.action_draft and (not orch_res.final_response.strip() or UNIFORM_FALLBACK_STRING in orch_res.final_response):
             draft_title = orch_res.action_draft.get("title") or "ticket request"
@@ -635,9 +642,15 @@ class ChatService:
                 "Please review the details in the draft card below. You can confirm the action to submit it or discard it."
             )
             orch_res.confidence = ConfidenceLevel.HIGH
+        elif has_action_task and not orch_res.action_draft:
+            # Action was requested but draft could not be generated (outage or refused).
+            # Never substitute an action outage for a missing document retrieval!
+            orch_res.confidence = ConfidenceLevel.HIGH
+            if not orch_res.final_response.strip() or UNIFORM_FALLBACK_STRING in orch_res.final_response:
+                orch_res.final_response = "**Action Notice:** The ticketing workflow service is temporarily unavailable. Please retry your request in a few moments."
 
-        # Check for Low Confidence Fallback Invariant
-        if orch_res.confidence == ConfidenceLevel.LOW and not orch_res.final_response.strip() and not orch_res.action_draft:
+        # Check for Low Confidence Fallback Invariant (STRICTLY for document RAG)
+        if orch_res.confidence == ConfidenceLevel.LOW and not orch_res.final_response.strip() and not orch_res.action_draft and not has_non_rag_task:
             full_assistant_text = UNIFORM_FALLBACK_STRING
             generation_complete = True
             eid = await redis_manager.append_stream_event(
@@ -720,7 +733,12 @@ class ChatService:
                 logger.error("Streaming failed (%s); falling back to direct synthesis text", stream_err)
                 if not full_assistant_text:
                     # Complete miss — use DAG synthesis text
-                    full_assistant_text = orch_res.final_response or UNIFORM_FALLBACK_STRING
+                    fallback_text = (
+                        "The requested service is temporarily unavailable. Please retry in a few moments."
+                        if has_non_rag_task
+                        else UNIFORM_FALLBACK_STRING
+                    )
+                    full_assistant_text = orch_res.final_response or fallback_text
                     generation_complete = True  # Fallback counts as complete
                     eid = await redis_manager.append_stream_event(
                         stream_key,

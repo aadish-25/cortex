@@ -169,7 +169,7 @@ async def execute_task(
                 "status": "ACTION_REFUSED",
                 "action": task.query,
                 "derived_context": derived_ctx,
-                "message": str(exc),
+                "message": f"Ticketing service is temporarily unavailable ({str(exc)}). Please retry in a few moments.",
             }, []
 
     # 6. GitHub Codebase & Issue Discovery (Phase 6.2 MCP)
