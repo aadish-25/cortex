@@ -209,6 +209,12 @@ def prepare_frontend_dependencies() -> str | None:
 
 
 def start_process(command: list[str], name: str, prefix: str, color: str, cwd: Path = BASE_DIR) -> subprocess.Popen:
+    extra_kwargs: dict[str, Any] = {}
+    if sys.platform == "win32":
+        # Isolate child processes into their own process group.
+        # This prevents Uvicorn's reload mechanism (which uses os.kill(pid, CTRL_C_EVENT) on Windows)
+        # from broadcasting a Ctrl+C signal across the entire console and killing run.py, Celery, and Vite.
+        extra_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     proc = subprocess.Popen(
         command,
         cwd=str(cwd),
@@ -216,6 +222,7 @@ def start_process(command: list[str], name: str, prefix: str, color: str, cwd: P
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
+        **extra_kwargs,
     )
     active_processes.append((proc, name))
     threading.Thread(target=stream_output, args=(proc.stdout, prefix, color), daemon=True).start()
@@ -253,8 +260,14 @@ def main() -> None:
         log("DOCKER", YELLOW, "Please ensure Docker Desktop is running, then run 'python run.py' again.")
         sys.exit(1)
 
-    # 3. Launch FastAPI.
-    backend_cmd = [python_exe, "-m", "uvicorn", "backend.main:app", "--reload", "--host", "0.0.0.0", "--port", "8000"]
+    # 3. Launch FastAPI (Scoped to backend/ to avoid reloading on frontend or storage edits).
+    backend_cmd = [
+        python_exe, "-m", "uvicorn", "backend.main:app",
+        "--reload",
+        "--reload-dir", str(BASE_DIR / "backend"),
+        "--host", "0.0.0.0",
+        "--port", "8000"
+    ]
     log("BACKEND", GREEN, "Starting FastAPI backend on http://localhost:8000...")
     backend_proc = start_process(backend_cmd, "Backend (FastAPI)", "BACKEND", GREEN)
 
