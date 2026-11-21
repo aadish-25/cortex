@@ -11,6 +11,7 @@ function pageBreadcrumb(pathname: string): { section: string; label: string } {
   if (pathname.startsWith('/admin/documents')) return { section: 'ADMINISTRATION', label: 'Documents' }
   if (pathname.startsWith('/admin/users')) return { section: 'ADMINISTRATION', label: 'People' }
   if (pathname.startsWith('/admin/quality')) return { section: 'ADMINISTRATION', label: 'Answer quality' }
+  if (pathname.startsWith('/admin/billing')) return { section: 'ADMINISTRATION', label: 'Billing & Usage' }
   if (pathname.startsWith('/admin/audit')) return { section: 'ADMINISTRATION', label: 'Audit trail' }
   if (pathname.startsWith('/memories')) return { section: 'ACCOUNT', label: 'Memories' }
   if (pathname.startsWith('/profile')) return { section: 'ACCOUNT', label: 'Profile' }

@@ -34,6 +34,7 @@ from backend.models.enums import AuditCategory, DocumentStatus
 from backend.models.token_usage import TokenUsageLog
 from backend.models.query_quality import QueryQualityLog
 from backend.models.document_log import DocumentProcessingLog
+from backend.models.user import User
 from backend.services.auth.audit_service import log_audit_event
 
 logger = logging.getLogger(__name__)
@@ -715,10 +716,35 @@ async def get_token_usage_analytics(
     grand_total_tokens = sum(r["total_tokens"] for r in breakdown)
     grand_total_cost = round(sum(r["estimated_cost_usd"] for r in breakdown), 6)
 
+    # Department-level token and cost distribution
+    dept_stmt = (
+        select(
+            func.coalesce(User.department, "Enterprise").label("department"),
+            func.sum(TokenUsageLog.total_tokens).label("total_tokens"),
+            func.sum(TokenUsageLog.estimated_cost_usd).label("total_cost_usd"),
+            func.count(TokenUsageLog.id).label("request_count"),
+        )
+        .join(User, TokenUsageLog.user_id == User.id, isouter=True)
+        .where(TokenUsageLog.created_at >= since)
+        .group_by(func.coalesce(User.department, "Enterprise"))
+        .order_by(func.sum(TokenUsageLog.total_tokens).desc())
+    )
+    dept_res = await session.execute(dept_stmt)
+    by_department = [
+        {
+            "department": row.department,
+            "total_tokens": int(row.total_tokens or 0),
+            "estimated_cost_usd": round(float(row.total_cost_usd or 0.0), 6),
+            "request_count": int(row.request_count or 0),
+        }
+        for row in dept_res.all()
+    ]
+
     return {
         "period_days": days,
         "since": since.isoformat(),
         "grand_total_tokens": grand_total_tokens,
         "grand_total_cost_usd": grand_total_cost,
         "by_provider_model": breakdown,
+        "by_department": by_department,
     }

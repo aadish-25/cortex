@@ -13,6 +13,7 @@ import { AdminDocuments } from './admin/AdminDocuments'
 import { AdminUsers } from './admin/AdminUsers'
 import { AdminAudit } from './admin/AdminAudit'
 import { AdminQuality } from './admin/AdminQuality'
+import { AdminBilling } from './admin/AdminBilling'
 
 export default function App() {
   return <ThemeProvider><AuthProvider><Routes>
@@ -32,6 +33,7 @@ export default function App() {
           <Route path="/admin/users" element={<AdminUsers />} />
           <Route path="/admin/audit" element={<AdminAudit />} />
           <Route path="/admin/quality" element={<AdminQuality />} />
+          <Route path="/admin/billing" element={<AdminBilling />} />
         </Route>
       </Route>
     </Route>

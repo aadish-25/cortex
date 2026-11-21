@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, NavLink } from 'react-router-dom'
-import { Activity, ChevronDown, FileText, LayoutDashboard, MessageSquare, Pencil, Plus, Search, ShieldCheck, Trash2, Users, X } from 'lucide-react'
+import { Activity, ChevronDown, CreditCard, FileText, LayoutDashboard, MessageSquare, Pencil, Plus, Search, ShieldCheck, Trash2, Users, X } from 'lucide-react'
 import { api, ApiError } from '../api/client'
 import type { Conversation, Page } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
@@ -118,6 +118,7 @@ export function Sidebar({ mobileOpen, onNavigate }: { mobileOpen: boolean; onNav
       <NavLink to="/admin/documents" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`} onClick={onNavigate}><FileText size={15} /><span>Documents</span></NavLink>
       <NavLink to="/admin/users" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`} onClick={onNavigate}><Users size={15} /><span>People</span></NavLink>
       <NavLink to="/admin/quality" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`} onClick={onNavigate}><Activity size={15} /><span>Answer quality</span></NavLink>
+      <NavLink to="/admin/billing" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`} onClick={onNavigate}><CreditCard size={15} /><span>Billing & Usage</span></NavLink>
       <NavLink to="/admin/audit" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`} onClick={onNavigate}><ShieldCheck size={15} /><span>Audit trail</span></NavLink>
     </div>}
 
