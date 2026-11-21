@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, NavLink } from 'react-router-dom'
 import { Activity, ChevronDown, FileText, LayoutDashboard, MessageSquare, Pencil, Plus, Search, ShieldCheck, Trash2, Users, X } from 'lucide-react'
-import { api } from '../api/client'
+import { api, ApiError } from '../api/client'
 import type { Conversation, Page } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
 import CortexLogo from '../components/CortexLogo'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 import { UserMenu } from './UserMenu'
 
 export function Sidebar({ mobileOpen, onNavigate }: { mobileOpen: boolean; onNavigate: () => void }) {
@@ -18,6 +19,7 @@ export function Sidebar({ mobileOpen, onNavigate }: { mobileOpen: boolean; onNav
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editTitle, setEditTitle] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<Conversation | null>(null)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -46,16 +48,20 @@ export function Sidebar({ mobileOpen, onNavigate }: { mobileOpen: boolean; onNav
   async function confirmDelete() {
     if (!deleteTarget) return
     setIsDeleting(true)
+    setDeleteError(null)
+    const targetId = deleteTarget.id
     try {
-      await api(`/api/v1/chat/conversations/${deleteTarget.id}`, { method: 'DELETE' })
-      setConversations((prev) => prev.filter((c) => c.id !== deleteTarget.id))
-      if (location.pathname === `/chat/${deleteTarget.id}`) {
+      await api(`/api/v1/chat/conversations/${targetId}`, { method: 'DELETE' })
+      setConversations((prev) => prev.filter((c) => c.id !== targetId))
+      setDeleteTarget(null)
+      if (location.pathname === `/chat/${targetId}` || location.pathname === `/chat/${targetId}/`) {
         navigate('/chat')
       }
-    } catch { /* error */ }
-    finally {
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'Could not delete conversation.'
+      setDeleteError(msg)
+    } finally {
       setIsDeleting(false)
-      setDeleteTarget(null)
     }
   }
 
@@ -173,16 +179,31 @@ export function Sidebar({ mobileOpen, onNavigate }: { mobileOpen: boolean; onNav
     </div>
 
     {deleteTarget && (
-      <div className="modal-overlay" onClick={() => setDeleteTarget(null)}>
-        <div className="modal-card confirm-modal" onClick={(e) => e.stopPropagation()}>
-          <h3>Delete conversation?</h3>
-          <p>This will permanently delete "<strong>{deleteTarget.title || 'New conversation'}</strong>" and its message history. This action cannot be undone.</p>
-          <div className="modal-actions">
-            <button type="button" className="secondary-button" onClick={() => setDeleteTarget(null)}>Cancel</button>
-            <button type="button" className="danger-button" disabled={isDeleting} onClick={() => void confirmDelete()}>{isDeleting ? 'Deleting…' : 'Delete'}</button>
+      <ConfirmDialog
+        title="Delete conversation?"
+        message={
+          <div>
+            <p style={{ margin: '0 0 8px' }}>
+              This will permanently delete &ldquo;<strong>{deleteTarget.title || 'New conversation'}</strong>&rdquo; and its message history. This action cannot be undone.
+            </p>
+            {deleteError && (
+              <div className="inline-error" style={{ marginTop: 8 }}>
+                {deleteError}
+              </div>
+            )}
           </div>
-        </div>
-      </div>
+        }
+        confirmText="Delete"
+        confirmVariant="danger"
+        isBusy={isDeleting}
+        onCancel={() => {
+          if (!isDeleting) {
+            setDeleteTarget(null)
+            setDeleteError(null)
+          }
+        }}
+        onConfirm={confirmDelete}
+      />
     )}
 
     <div className="sidebar-user-anchor"><UserMenu /></div>
