@@ -63,7 +63,7 @@ async def probe_updating_policies(
     query_dense = generate_dense_embeddings([query])[0]
     probe_filter = build_updating_probe_filter(user)
 
-    # Search staged chunks
+    # Search staged chunks with minimum semantic relevance threshold
     try:
         search_res = client.query_points(
             collection_name=settings.QDRANT_COLLECTION,
@@ -71,6 +71,7 @@ async def probe_updating_policies(
             using="dense",
             query_filter=probe_filter,
             limit=top_k,
+            score_threshold=0.30,
         )
     except Exception as exc:
         logger.warning("Updating policy probe failed: %s", exc)
