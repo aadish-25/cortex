@@ -404,6 +404,10 @@ button.suggestion-pill:hover { background: var(--primary-line); }
 .send-button { display: inline-grid; width: 30px; height: 30px; place-items: center; color: #fff; background: var(--primary); border: 0; border-radius: 8px; }
 .send-button:hover { background: var(--primary-hover); }
 .send-button:disabled { color: var(--muted-2); background: var(--surface-hover); opacity: 1; }
+.stop-button { display: inline-grid; width: 30px; height: 30px; place-items: center; color: #fff; background: var(--danger, #ef4444); border: 0; border-radius: 8px; cursor: pointer; transition: background 0.15s ease, transform 0.15s ease; }
+.stop-button:hover { background: #dc2626; transform: scale(1.05); }
+.mic-button { display: inline-grid; width: 30px; height: 30px; place-items: center; color: var(--muted); background: transparent; border: 0; border-radius: 8px; }
+.mic-button:disabled { opacity: 0.45; cursor: not-allowed; }
 .composer-disclaimer { margin: 7px auto 0; color: var(--muted-2); font-size: 9px; text-align: center; }
 .toast-message { position: fixed; z-index: 100; right: 24px; bottom: 22px; display: flex; align-items: center; gap: 13px; padding: 10px 12px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); font-size: 11px; }
 .toast-message button { display: inline-flex; color: var(--muted); background: transparent; border: 0; }

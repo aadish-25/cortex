@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ArrowUp, BookOpen, Brain, Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Clock, Copy, ExternalLink, FileSearch, FileText, LoaderCircle, MoreHorizontal, Pencil, Plus, RefreshCw, Search, ShieldAlert, ThumbsDown, ThumbsUp, X } from 'lucide-react'
+import { ArrowUp, BookOpen, Brain, Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Clock, Copy, ExternalLink, FileSearch, FileText, LoaderCircle, Mic, MoreHorizontal, Pencil, Plus, RefreshCw, Search, ShieldAlert, Square, ThumbsDown, ThumbsUp, X } from 'lucide-react'
 import { api, streamChat, type StreamEvent } from '../api/client'
 import type { ChatMessage, CitationData, Conversation, Page } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
@@ -651,6 +651,23 @@ export function ChatPage() {
   const [showModelPicker, setShowModelPicker] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const activeAssistantIdRef = useRef<string | null>(null)
+  const activeConvIdRef = useRef<string | null>(null)
+
+  function stopGeneration() {
+    if (abortRef.current) {
+      abortRef.current.abort()
+      abortRef.current = null
+    }
+    setIsStreaming(false)
+    if (activeAssistantIdRef.current) {
+      patchMessage(activeAssistantIdRef.current, {
+        streaming: false,
+        interrupted: true,
+      })
+      activeAssistantIdRef.current = null
+    }
+  }
 
   const loadMessages = useCallback(async (id: string, page = 1, prepend = false) => {
     setLoadingHistory(true)
@@ -689,8 +706,14 @@ export function ChatPage() {
       return
     }
 
-    abortRef.current?.abort()
-    setIsStreaming(false)
+    // Only abort ongoing stream if user intentionally switched to a DIFFERENT conversation
+    if (isStreaming && activeConvIdRef.current && activeConvIdRef.current !== conversationId) {
+      abortRef.current?.abort()
+      setIsStreaming(false)
+      activeConvIdRef.current = null
+      activeAssistantIdRef.current = null
+    }
+
     setInput('')
     if (conversationId) {
       setMessages([]); setHistoryPage(1); setHistoryPages(1)
@@ -759,6 +782,8 @@ export function ChatPage() {
   async function startStream(path: string, body: Record<string, unknown>, assistantId: string) {
     const controller = new AbortController()
     abortRef.current = controller
+    activeAssistantIdRef.current = assistantId
+    activeConvIdRef.current = conversationId || null
     setIsStreaming(true)
     try {
       await streamChat(path, body, (event) => handleStreamEvent(assistantId, event), () => { void signOut().finally(() => navigate('/login', { replace: true })) }, controller.signal)
@@ -769,6 +794,7 @@ export function ChatPage() {
       }
     } finally {
       if (abortRef.current === controller) abortRef.current = null
+      activeAssistantIdRef.current = null
     }
   }
 
@@ -908,7 +934,7 @@ export function ChatPage() {
       </div>}
     </div>
 
-    <div className="composer-area"><form className="composer" onSubmit={submit}><textarea value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={handleKeyDown} placeholder="Ask about a policy, process, or anything in your workspace…" rows={2} /><div className="composer-footer"><div className="composer-footer-left"><div className="model-picker-wrap"><button type="button" className="model-picker" onClick={() => setShowModelPicker((value) => !value)}><span className="model-indicator" />{models.find((item) => item.id === selectedModel)?.name || 'Default model'}<ChevronDown size={14} /></button>{showModelPicker && <><button type="button" className="menu-dismiss" onClick={() => setShowModelPicker(false)} aria-label="Close model picker" /><div className="model-menu composer-model-menu">{models.map((model) => <button type="button" key={model.id} className={selectedModel === model.id ? 'selected' : ''} onClick={() => { setSelectedModel(model.id); setShowModelPicker(false) }}><span><strong>{model.name}</strong><small>{model.provider} · {model.badge}</small></span>{selectedModel === model.id && <Check size={15} />}</button>)}</div></>}</div><span className="composer-hint">Answers are grounded in sources you can access.</span></div><div className="composer-actions"><span className="keyboard-hint">Shift + Enter for a new line</span><button className="send-button" type="submit" disabled={!input.trim() || isStreaming} aria-label="Send message">{isStreaming ? <LoaderCircle className="spin" size={17} /> : <ArrowUp size={18} />}</button></div></div></form><p className="composer-disclaimer">Cortex can make mistakes. Check the cited source before acting on important information.</p></div>
+    <div className="composer-area"><form className="composer" onSubmit={submit}><textarea value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={handleKeyDown} placeholder="Ask about a policy, process, or anything in your workspace…" rows={2} /><div className="composer-footer"><div className="composer-footer-left"><div className="model-picker-wrap"><button type="button" className="model-picker" onClick={() => setShowModelPicker((value) => !value)}><span className="model-indicator" />{models.find((item) => item.id === selectedModel)?.name || 'Default model'}<ChevronDown size={14} /></button>{showModelPicker && <><button type="button" className="menu-dismiss" onClick={() => setShowModelPicker(false)} aria-label="Close model picker" /><div className="model-menu composer-model-menu">{models.map((model) => <button type="button" key={model.id} className={selectedModel === model.id ? 'selected' : ''} onClick={() => { setSelectedModel(model.id); setShowModelPicker(false) }}><span><strong>{model.name}</strong><small>{model.provider} · {model.badge}</small></span>{selectedModel === model.id && <Check size={15} />}</button>)}</div></>}</div><span className="composer-hint">Answers are grounded in sources you can access.</span></div><div className="composer-actions"><span className="keyboard-hint">Shift + Enter for a new line</span><button type="button" className="mic-button" disabled title="Voice input (Coming soon)" aria-label="Voice input (Coming soon)"><Mic size={16} /></button>{isStreaming ? <button type="button" className="stop-button" onClick={stopGeneration} title="Stop response" aria-label="Stop AI response"><Square size={12} fill="currentColor" /></button> : <button className="send-button" type="submit" disabled={!input.trim()} aria-label="Send message"><ArrowUp size={18} /></button>}</div></div></form><p className="composer-disclaimer">Cortex can make mistakes. Check the cited source before acting on important information.</p></div>
 
     {sourceMessage && <SourcesDrawer open={Boolean(sourceMessage)} onClose={() => { setSourceMessage(null); setSourceNumber(null); setSourceData(null) }} citationValue={sourceData || resolveMessageCitations(sourceMessage, messages)} focusNumber={sourceNumber} />}
     {dislikeModalTarget && <Modal title="Share feedback" onClose={() => setDislikeModalTarget(null)}><form onSubmit={handleDislikeSubmit}>
