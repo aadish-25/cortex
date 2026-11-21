@@ -190,6 +190,259 @@ Typing long, complex enterprise queries—such as detailed incident postmortems,
 
 ---
 
+### 1.9 Semantic Score Threshold for Updating Policy Probe (`updating_policy_probe.py`)
+
+#### The Problem: False-Positive In-Progress Notices During Active Uploads
+Currently, when a user query fails confidence checks in the primary RAG and CRAG pipelines (top reranker score $< 0.35$), the system falls back to `probe_updating_policies()` (`backend/services/retrieval/updating_policy_probe.py`). 
+This probe queries Qdrant for non-live chunks (`is_live == False`) matching the user's 3D RBAC filter using `limit = 3`, and checks if the matched document has `status == DocumentStatus.UPDATING` in PostgreSQL.
+
+However, `client.query_points()` does not currently pass an explicit `score_threshold`. Because vector search with `limit = 3` *always* returns the nearest 3 vectors regardless of how low the cosine similarity is:
+- If an admin is currently uploading an *Engineering Security SOP*, and an engineer asks an entirely unrelated or out-of-domain question (e.g., *"How do I bake chocolate cookies?"* or *"Who won the match?"*):
+- Qdrant will return the staged security SOP chunks as the nearest vectors anyway (even with a dismal cosine similarity score of $0.05$).
+- The probe detects that the document status is `UPDATING` and falsely returns:
+  > *"Notice: The official policy regarding 'Engineering Security SOP' is currently undergoing an administrative update..."*
+- This creates false-positive locks and misleads users into thinking their unrelated question is covered by the updating document.
+
+#### Proposed Implementation & Hardening
+1. **Pass `score_threshold` into Qdrant `query_points`**:
+   Update `backend/services/retrieval/updating_policy_probe.py` to enforce an explicit semantic similarity cutoff (calibrated at $\ge 0.30$):
+   ```python
+   search_res = client.query_points(
+       collection_name=settings.QDRANT_COLLECTION,
+       query=query_dense,
+       using="dense",
+       query_filter=probe_filter,
+       score_threshold=0.30,  # Enforce genuine semantic relevance
+       limit=top_k,
+   )
+   ```
+2. **Deterministic Evaluation**:
+   If the query has low cosine similarity to the staged document ($< 0.30$), Qdrant returns zero points. The probe cleanly returns `None`, and the system outputs the correct safe refusal message:
+   > *"I couldn't find verified information in the documents you have access to."*
+
+---
+
+### 1.10 Document Ingestion Modal UX & Asynchronous Upload Lifecycle
+
+#### The Problem: Modal Freezing and Form Inconsistencies
+Currently, uploading a document keeps the modal dialog open in a frozen "Uploading…" state while the file uploads and triggers processing, leaving the modal backdrop open with an active "Cancel" button. Furthermore:
+1. **Manual Text Entry for Departments**: The "Department" input in the upload modal is an open text field, leading to typos (e.g. typing `"engineering"` or `"Eng"` instead of `"Engineering"`), which corrupts 3D RBAC filtering.
+2. **Confusing File Change Action**: The file selection box displays a simple "Change" button beside a delete icon without clear edit semantics.
+3. **Synchronous Upload Experience**: Users must stare at a loading modal rather than continuing their administrative work.
+
+#### Planned Architecture & UX Enhancements
+1. **Instant Modal Dismissal & Optimistic Row Insertion**:
+   - The moment the admin clicks **"Upload and index"**, the dialog box immediately closes.
+   - The UI optimistically inserts a new row at the top of the Documents table with an explicit transient state: **`UPLOADING`** (or a blue spinner badge).
+   - The upload executes asynchronously via background XHR/fetch.
+2. **New Explicit State (`UPLOADING` $\to$ `UPDATING` $\to$ `ACTIVE`)**:
+   - Add `UPLOADING` to `DocumentStatus` enum to represent the file transfer and initial server staging phase before Celery picks up chunking.
+3. **Toast Notifications & Admin Alerts**:
+   - When the Celery worker finishes indexing, the backend emits a real-time event (or auto-poll completion), triggering a system toast notification:
+     * *Success*: `"Document 'SRS_GEO...' successfully indexed and is now Live."*
+     * *Failure*: `"Document 'SRS_GEO...' processing failed. Click to view logs."*
+4. **Structured Department Dropdown**:
+   - Replace the free-text Department `<input>` with a strict `<select>` dropdown populated from authorized departments (`Engineering`, `HR`, `Finance`, `Enterprise`), completely eliminating RBAC categorization typos.
+5. **Polished File Attachment Card**:
+   - Replace the ambiguous "Change" button with a clear **"Edit / Replace File"** action that cleanly opens the OS file picker, paired with a tooltip for file size/extension limits.
+
+---
+
+### 1.11 Document Processing History Segregation & Department Filtering Performance
+
+#### The Problem
+1. **Unsegregated Processing Logs**: Clicking the "Processing history" (scroll icon) opens an unstructured text dump mixing file upload logs, Celery task logs, chunking metrics, and sync sweeper traces in a single view.
+2. **Slow Department Filtering**: Filtering documents by department executes client-side re-renders or unindexed PostgreSQL sequential scans as the document repository grows.
+
+#### Planned Architecture & Capabilities
+1. **Structured Log Segregation (Tabbed History Modal)**:
+   - Partition processing history into distinct, searchable tabs:
+     - **Ingestion & Parsing**: File text extraction, page counts, and character counts.
+     - **Vector Indexing**: Chunk breakdown, identity header stamps, and Qdrant batch upsert latencies.
+     - **Reconciliation & Audits**: Version flip timestamps, sweeper verification, and rollback actions.
+2. **Database Composite Indexing for Rapid Filtering**:
+   - Add a composite B-Tree index on PostgreSQL:
+     ```sql
+     CREATE INDEX idx_documents_dept_status ON documents (department, status, is_live);
+     ```
+   - Eliminates table scan latency, providing instant (<10ms) responses when filtering across thousands of enterprise documents by department and clearance level.
+
+---
+
+### 1.12 Document Directory Version Grouping & Client-Side Data Caching (TanStack Query / SWR)
+
+#### The Problem: Historical Version Clutter & High-Frequency API Refetching
+1. **Historical Version Clutter in Admin Table**:
+   - Currently, `GET /api/v1/documents/` returns all rows in the `documents` table without version grouping. If a document has undergone 3 revisions ($v1, v2, v3$), the table displays 3 separate rows.
+   - Rows for older versions ($v1$ and $v2$) have their **Reindex**, **Replace**, and **Restore** action buttons permanently greyed out because `is_latest` is false. This clutters the UI with non-actionable rows, confuses administrators, and artificially bloats the table row count.
+2. **Aggressive Network Refetching & Synchronous Disk Probes**:
+   - **No Client-Side Cache**: The frontend `AdminDocuments.tsx` executes raw `load()` calls inside `useEffect()` on component mount. Switching away to another tab (e.g., Overview or Settings) and returning immediately re-fires `GET /api/v1/documents/`, `GET /api/v1/auth/me`, and `GET /api/v1/admin/notifications`.
+   - **Synchronous Disk I/O on Every List Request**: On the backend, `GET /api/v1/documents/` executes `Path(d.storage_path).is_file()` synchronously for every single document in the page to populate `has_source_file`. On cloud volumes (EFS, EBS, or remote mounts), synchronous filesystem system calls for 20–50 items degrade API latency.
+   - **Unindexed In-Memory Aggregation**: The backend calculates `is_latest` dynamically on every request by running `SELECT filename, department, MAX(version) FROM documents GROUP BY filename, department`, causing repeated database grouping operations instead of reading an indexed column.
+
+#### Planned Architecture & Capabilities
+1. **Default "Latest Only" View with Expandable Version Drawer**:
+   - **Default Table Query**: The main document directory displays **one row per logical document**, strictly filtering `WHERE is_latest = TRUE`.
+   - **Expandable Revision History**: Each document row features a clickable version badge (e.g. `v3 (Latest)`). Clicking it expands an accordion drawer showing previous archived revisions ($v2, v1$) with their historical upload dates, audit logs, and a dedicated **"Rollback to this version"** action.
+   - Eliminates dead/disabled button rows from the primary administrative workspace.
+2. **Persistent `is_latest` Schema Column & Atomic Version Transition**:
+   - Add a persistent indexed column to the `documents` table:
+     ```sql
+     ALTER TABLE documents ADD COLUMN is_latest BOOLEAN DEFAULT TRUE;
+     CREATE INDEX idx_documents_filename_latest ON documents (filename, department, is_latest);
+     ```
+   - When a replacement version is activated, a single atomic database transaction updates the previous latest row to `is_latest = FALSE` and commits the new row with `is_latest = TRUE`.
+   - Replaces the dynamic `GROUP BY` aggregation with a fast index lookup.
+3. **Cached `has_source_file` Metadata**:
+   - Store `has_source_file: bool` directly as a database column updated during upload, replacement, or deletion, completely eliminating filesystem probes during list queries.
+4. **Client-Side Query Caching (TanStack Query / SWR)**:
+   - Wrap document listing and admin status requests in TanStack Query (`useQuery`):
+     ```typescript
+     const { data: documents, isLoading } = useQuery({
+       queryKey: ['documents', { page, department, clearance, status, search }],
+       queryFn: () => fetchDocuments(...),
+       staleTime: 5 * 60 * 1000, // 5 minutes stale time
+       refetchOnWindowFocus: false,
+     });
+     ```
+   - Navigating between tabs or pages renders immediately from the local in-memory cache without hitting the network, and automatically invalidates only when documents are uploaded, deleted, or replaced.
+
+---
+
+### 1.13 Disambiguation Between Administrative Action Execution (`admin_reindex`) and Audit Log Inspection (`admin_audit_logs`)
+
+#### The Problem: Action-Inspection Collision in Natural Language Prompts
+When a system administrator asks natural language questions regarding past operational history—such as *"tell me which documents were reindexed manually by admin in the last 7 days"* or *"list documents reindexed recently"*:
+1. **Misclassification in Query Planner**:
+   - The LiteLLM query planner (`backend/services/orchestration/query_planner.py`) matches the keyword *"reindex"* and assigns `tool_action = "admin_reindex"` (which is an imperative action tool intended to trigger a new asynchronous reindex task for a specific document UUID).
+   - It fails to distinguish that the inquiry is asking for historical **audit trail records** (`admin_audit_logs`).
+2. **Missing UUID Rejection**:
+   - In `backend/services/admin/admin_agent.py`, the `admin_reindex` handler searches for a document UUID. Because none is provided in a general history inquiry, it returns:
+     > *"Provide the document ID to reindex it. You can copy it from Admin → Documents."*
+3. **Synthesis LLM Fallback Truncation**:
+   - The final synthesis model receives this operational notice in `<retrieved_context>`. Since the notice fails to answer the user's factual inquiry about past documents, the model triggers Rule 4 safe fallback:
+     > *"I couldn't find verified information in the documents you have access to."*
+
+#### Architectural Solution & Proposed Implementation
+1. **Disambiguation in Query Planner Instructions**:
+   - Update `query_planner.py` system prompt rules to explicitly separate action execution from historical inquiry:
+     - Imperative execution (*"reindex document <uuid>"*, *"retry ingestion"*) -> `admin_reindex`.
+     - Historical/Audit queries (*"which documents were reindexed"*, *"show reindex history"*, *"who reindexed documents"*) -> `admin_audit_logs` with `category: DOCUMENT`.
+2. **Graceful Internal Fallback in `admin_agent.py`**:
+   - If `admin_reindex` is invoked without a UUID and the query contains listing/past-tense interrogatives (*"which"*, *"list"*, *"show"*, *"last X days"*), gracefully route internally to `query_audit_logs(category=AuditCategory.DOCUMENT)` to return recent reindexing audit records rather than returning a dead-end error message.
+
+---
+
+### 1.14 Dedicated Enterprise Administrative Tool Suite & Operational Agent Expansion
+
+#### The Problem: Monolithic & Underdeveloped `ADMIN_OPERATION` Layer
+Currently, administrative capabilities are channeled through a single generic `ADMIN_OPERATION` task type with basic diagnostic functions (`inspect_system_health`, `inspect_audit_logs`, `get_document_status`, `trigger_reindex`). In its current state, `ADMIN_OPERATION` does not function as a proper enterprise tool suite:
+1. **Lack of Granular Tool Definitions**: Tools lack dedicated OpenAI/Pydantic function declarations with schema validation for the planner, creating confusion between read queries (e.g., audit log history) and active system mutations.
+2. **Missing Administrative Search & Analytics**: Administrators cannot ask natural-language questions over system telemetry (e.g., query failure rates, active user counts, indexing latency percentiles, or department-level storage consumption) because no dedicated analytical tools exist.
+3. **Fragile Workflow Execution**: Actions like `trigger_reindex` require copy-pasting raw 36-character UUIDs from the admin portal rather than resolving documents semantically by title or filename.
+
+#### Planned Architecture & Proper Tool Implementation
+1. **First-Class Operational Tool Catalog**:
+   - Replace the generic `ADMIN_OPERATION` bucket with a modular catalog of schema-validated administrative tools:
+     - `admin_query_audit_trail`: Parameterized structured queries for time windows, categories, user IDs, and status codes.
+     - `admin_document_operations`: Semantic document resolution by title/filename, version diff inspection, and batch re-indexing triggers with Celery task monitoring.
+     - `admin_user_directory_tools`: Clearance adjustments, department transfers, and immediate session revocations.
+     - `admin_system_diagnostics`: Real-time Redis queue depths, Qdrant RAM/HNSW index memory footprints, and PostgreSQL connection pool metrics.
+2. **Dedicated Admin Visual Cards & HITL Confirmations**:
+   - Destructive operations (e.g., purging older versions or mass reindexing) will mandate Human-in-the-Loop (HITL) approval cards with 15-minute TTLs.
+   - Diagnostic outputs will render as dedicated operational widgets (e.g. system status badges, interactive audit tables) rather than being flattened into plain-text synthesis.
+
+---
+
+### 1.15 Problems We Will Discuss Later: Knowledge Base (Internal RAG) vs. External Integration (Drive/GitHub) Collision & Explicit Connector Invocations (`@drive`)
+
+#### The Problem: Ambiguous Routing Collisions & The "Blind Planner" Trap
+When an employee uploads a document (e.g., `SRS_GEO_Content_Gap_Engine_v2_ultimate.docx`) into Cortex's internal knowledge base and subsequently asks questions about its content (e.g., *"in srs what is the last ai engine named"*):
+1. **The "Blind Planner" Dilemma**:
+   - The query planner LLM (`query_planner.py`) has no direct awareness of which specific files exist inside the Qdrant vector database.
+   - Natural language queries referencing "documents", "specs", or "uploaded files" or containing file extensions (`.docx`, `.pdf`) get misclassified into `DRIVE_SEARCH` due to regex rules or ambiguous prompt heuristics (*"Use DRIVE_SEARCH when user references Google Drive or uploaded documents"*).
+2. **Asymmetric Output Failure Mode**:
+   - `INTERNAL_RAG` extracts semantic chunks with cross-encoder re-ranking scores (`0.993`).
+   - `DRIVE_SEARCH` merely queries Google Drive API metadata and returns viewer URLs (`[SRS.docx](https://...)`), without extracting text passages unless specifically directed to read.
+   - When the DAG executes `DRIVE_SEARCH`, only URL links reach `<retrieved_context>`.
+   - The final synthesis LLM strictly follows Grounding Rule 4 (*"If no verified evidence exists in retrieved context, output fallback string"*), responding *"I couldn't find verified information in the documents you have access to"*, despite the document being 100% indexed in Qdrant.
+3. **Conversational Context Bias Cascade**:
+   - Once a tool like `DRIVE_SEARCH` is invoked, follow-up messages (even explicit overrides like *"use rag"*) inherit conversational history bias. The planner adheres to contextual continuity (*"continue with previous tool"*) and re-dispatches `DRIVE_SEARCH`, locking the user in a failed loop.
+
+#### Planned Architecture & Solutions: The Explicit Connector Paradigm
+To eliminate brittle prompt engineering and routing guesswork, enterprise search architectures (ChatGPT, Claude, Cursor) adhere to strict control-plane separation:
+
+1. **Default to Internal Knowledge Base (`INTERNAL_RAG`)**:
+   - All informational inquiries, company policies, technical specifications, and uploaded document questions default **strictly and exclusively** to `INTERNAL_RAG` (Qdrant).
+   - The router is never permitted to guess external cloud integrations on general document queries.
+2. **Explicit Connector Invocations via `@mentions` (Industry Standard)**:
+   - External enterprise integrations (Google Drive, GitHub, Jira) are invoked **only** when explicitly designated by the user:
+     - **UI `@mentions`**: Tagging connectors directly in the chat input bar (e.g., `@drive find srs doc`, `@github inspect auth.py`, `@jira my open tickets`), mirroring Cursor's `@docs`/`@code` and ChatGPT's `@agent` model.
+     - **Explicit Keyword Stems**: The user explicitly names the external third-party service in natural language (e.g., *"in my connected Google Drive"*, *"from the GitHub repository"*).
+   - This prevents accidental diversion of internal knowledge queries to external cloud endpoints.
+3. **Deterministic Database Catalog Pre-Filter**:
+   - Prior to calling the planner LLM, a sub-millisecond PostgreSQL query checks the `documents` table for title/filename matches:
+     ```sql
+     SELECT id FROM documents WHERE title ILIKE :search OR filename ILIKE :search LIMIT 1;
+     ```
+   - If an indexed document exists in Cortex, the system deterministically binds the task to `INTERNAL_RAG`, bypassing LLM classification.
+4. **DAG Speculative Execution Cascade (The Safety Net)**:
+   - In `dag_orchestrator.py`, if an external tool (`DRIVE_SEARCH`) executes but yields **zero text passages** (only URL links), and the prompt is an informational query (*"what is"*, *"how does"*, *"name"*), the DAG orchestrator automatically speculatively cascades to `INTERNAL_RAG` against Qdrant before synthesis, guaranteeing that available vector chunks are never dropped.
+
+---
+
+### 1.16 Chat Conversation Deletion & Foreign Key Cascade Lifecycle
+
+#### The Problem: Deletion Failures from Database Constraints and Silent UI Swallowing
+Currently, clicking the delete button (trash icon) next to a conversation in the sidebar fails in production environments:
+1. **Foreign Key Constraint Violations in PostgreSQL**:
+   When the client invokes `DELETE /api/v1/chat/conversations/{conversation_id}`, the backend attempts to delete `MessageFeedback`, `Message`, and `Conversation`. However:
+   - `query_quality_metrics` has a foreign key `conversation_id -> conversations.id`. When answering user queries, quality metrics are recorded against the active session. Attempting to delete the conversation row triggers `psycopg.errors.ForeignKeyViolation: update or delete on table "conversations" violates foreign key constraint "query_quality_metrics_conversation_id_fkey"`.
+   - `user_memories` has foreign keys `source_conversation_id -> conversations.id` and `source_message_id -> messages.id`. If memories were generated or linked from that conversation or its messages, deleting the messages or conversation row triggers foreign key violation errors on `memories_source_conversation_id_fkey` or `memories_source_message_id_fkey`.
+   - `messages` has a self-referencing foreign key `parent_message_id -> messages.id`. If thread messages reference their parent, deleting all messages in a bulk batch without nullifying the self-reference violates foreign key ordering.
+   Consequently, the endpoint crashes with HTTP 500.
+2. **Silent Failure & Missing Toast Feedback in Frontend**:
+   In `Sidebar.tsx`, `confirmDelete()` wrapped the API call in an empty `catch { /* error */ }` block without displaying toast notifications, inspecting HTTP error status, or indicating why the conversation remained in the list.
+
+#### Planned Architecture & Implementation
+1. **Orchestrated Relational Cascade & Foreign Key Nullification**:
+   In `backend/routers/chat.py`, ensure atomic, safe cleanup within a single database transaction:
+   - Nullify telemetry references: `UPDATE query_quality_metrics SET conversation_id = NULL WHERE conversation_id = :conv_id` (preserving audit telemetry without blocking row deletion).
+   - Nullify episodic memory links: `UPDATE user_memories SET source_conversation_id = NULL WHERE source_conversation_id = :conv_id` and `UPDATE user_memories SET source_message_id = NULL WHERE source_message_id IN (:msg_ids)` (preserving the user's semantic memory while safely unlinking the deleted chat).
+   - Clear self-referencing message chains: `UPDATE messages SET parent_message_id = NULL WHERE conversation_id = :conv_id`.
+   - Cascade delete `message_feedback` records.
+   - Delete `messages` records.
+   - Delete `conversations` record and commit atomically.
+2. **Robust Frontend Feedback & State Management**:
+   Surface toast error messages if network or server errors occur during deletion, immediately purge the deleted conversation from the sidebar state upon 200 OK, and gracefully route back to `/chat` if the deleted conversation was currently viewed.
+
+---
+
+### 1.17 Custom Dialog Boxes for Deletion and Destructive Actions (Replacing Browser Popups)
+
+#### The Problem: Native `window.confirm` and `window.alert` Disruptions
+Currently, multiple administrative and destructive actions across the frontend rely on primitive browser dialogs:
+1. `AdminDocuments.tsx`: Uses `window.confirm("Delete “" + doc.title + "” and its indexed content?")` when deleting an indexed document.
+2. `AdminUsers.tsx`: Uses `window.confirm("Reject access request for...")` when deleting a pending user registration and `window.confirm("Reject this corporate email revision request?")` when rejecting email changes.
+3. `AdminNotificationBell.tsx`: Uses `window.confirm("Reject this email revision request?")` and native `alert()` when handling approval or rejection errors.
+
+**Deficiencies of Browser Native Dialogs**:
+- **Design Inconsistency**: Native popups break the Cortex visual design language and branding.
+- **Theming & Dark Mode Failure**: Native browser dialogs render in operating system white/gray, glaring harshly when a user is in Dark Mode.
+- **Thread Blocking & Poor Accessibility**: Native `window.confirm()` and `alert()` freeze the JavaScript main thread, cannot be customized with warning icons or loading spinners during async deletion, and lack keyboard/focus management.
+
+#### Planned Architecture & Capabilities
+1. **Reusable Accessible `ConfirmDialog` Component**:
+   Build a custom, reusable dialog component (`frontend/src/components/ConfirmDialog.tsx`) styled according to the Cortex design system:
+   - Backdrop scrim with click-outside and `Escape` key dismissal.
+   - Destructive mode (`variant="danger"` with red action button) and informational/warning modes.
+   - Customizable title, descriptive message, confirm button text, and cancel button text.
+   - In-flight loading state (`isBusy` / `loading`) that disables controls and shows spinner while the API deletion call completes.
+2. **Comprehensive Deprecation of Native Alert/Confirm**:
+   Replace all occurrences of `window.confirm` and `alert` across `AdminDocuments`, `AdminUsers`, `AdminNotificationBell`, and `Sidebar` with the new custom dialog component and unified toast alerts.
+
+---
+
 ## 2. Moderate Complexity Scope (Medium-Term Enhancements)
 
 These features involve integrations with external worker pipelines, scheduled cron tasks, or cross-service state synchronization.
@@ -337,3 +590,7 @@ A consolidated roadmap checklist of core features and operational capabilities s
 4. **Dedicated Billing & Usage Section:** Introduce a separate Billing & Usage section instead of keeping billing information within the Overview tab. Centralize usage statistics, consumption details, billing information, and related management features in one dedicated section. *(Refer to [Section 1.7](#17-dedicated-billing--usage-section-admin-portal-centralization))*
 5. **Dynamic Knowledge Source Management & Access Control:** Allow administrators to dynamically connect and manage knowledge sources such as Google Drive folders and GitHub repositories, configure which sources are available to different users or teams, and enforce source-level access permissions during retrieval. *(Refer to [Section 2.6](#26-dynamic-knowledge-source-management--access-control-admin-connector-studio))*
 6. **Automated RAG Parameter Calibration via Optuna:** Build and execute an automated parameter calibration pipeline using Optuna Bayesian optimization (TPE) over the 50-pair QA benchmark dataset. Calibrate hybrid retrieval alpha weighting ($\alpha$), initial retrieval depth ($K$), and cross-encoder reranking cutoffs ($\tau$) to maximize Ragas Faithfulness and Context Recall, replacing current uncalibrated empirical defaults. *(Refer to [Section 2.4](#24-automated-rag-evaluation-pipeline-ragas--optuna-parameter-calibration))*
+7. **Document Directory Version Grouping & Client-Side Caching:** Default the admin document table to display only latest active versions (`is_latest = TRUE`) with expandable revision drawers, add an indexed `is_latest` database column, and eliminate unneeded network refetches and disk probes via TanStack Query client caching. *(Refer to [Section 1.12](#112-document-directory-version-grouping--client-side-data-caching-tanstack-query--swr))*
+8. **Explicit Connector Invocations (`@drive`) & Knowledge Base Collision Prevention:** Default all document inquiries strictly to `INTERNAL_RAG` (Qdrant), require explicit user `@mentions` (`@drive`, `@github`, `@jira`) to invoke external tools (mirroring ChatGPT/Claude/Cursor), ground routing with a deterministic Postgres catalog pre-filter, and implement a DAG speculative execution cascade if external tools return zero text passages. *(Refer to [Section 1.15](#115-problems-we-will-discuss-later-knowledge-base-internal-rag-vs-external-integration-drivegithub-collision--explicit-connector-invocations-drive))*
+9. **Chat Conversation Deletion & Foreign Key Cascade Lifecycle:** Ensure conversation deletion cleanly cascades without 500 foreign key errors by nullifying telemetry references (`query_quality_metrics`), unlinking episodic memories (`user_memories`), clearing self-referencing message chains (`parent_message_id`), deleting message feedback, and providing explicit frontend feedback. *(Refer to [Section 1.16](#116-chat-conversation-deletion--foreign-key-cascade-lifecycle))*
+10. **Custom Confirmation & Alert Dialogs (Eliminate Browser Native Popups):** Replace all primitive `window.confirm()` and `window.alert()` popups with a standardized, theme-aware custom `ConfirmDialog` component across document deletion, user access request rejection, email revision rejections, and conversation deletion. *(Refer to [Section 1.17](#117-custom-dialog-boxes-for-deletion-and-destructive-actions-replacing-browser-popups))*
