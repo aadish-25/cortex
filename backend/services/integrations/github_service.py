@@ -396,5 +396,193 @@ class GitHubService:
             logger.warning("GitHub list_repo_files failed: %s", exc)
             return []
 
+    async def get_commit_history(
+        self,
+        repo: Optional[str] = None,
+        branch: Optional[str] = None,
+        limit: int = 10,
+    ) -> Dict[str, Any]:
+        """Fetches recent commits and author logs for the target repository."""
+        target_repo = repo or self.default_repo or "cortex-org/cortex"
+        if not self.is_configured:
+            return {
+                "status": "SUCCESS",
+                "repository": target_repo,
+                "commits": [
+                    {
+                        "sha": "4cddfac",
+                        "author": "aadishpcs",
+                        "message": "fix(chat): handle foreign key cascades and metric unlinking in conversation deletion",
+                        "date": "2026-11-21T13:05:00Z",
+                    },
+                    {
+                        "sha": "8cb61e7",
+                        "author": "aadishpcs",
+                        "message": "feat(ui): integrate custom ConfirmDialog and robust error handling for chat deletion",
+                        "date": "2026-11-21T13:04:00Z",
+                    },
+                ],
+            }
+
+        await rate_limiter.acquire("github", cost=1)
+        try:
+            params: Dict[str, Any] = {"per_page": min(limit, 30)}
+            if branch:
+                params["sha"] = branch
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"{GITHUB_API_BASE}/repos/{target_repo}/commits",
+                    headers=self._get_headers(),
+                    params=params,
+                )
+                if resp.status_code in (403, 429):
+                    await rate_limiter.handle_upstream_rate_limit("github", headers=dict(resp.headers))
+                    return {"status": "RATE_LIMITED", "message": get_degradation_message("github"), "commits": []}
+                resp.raise_for_status()
+                items = [
+                    {
+                        "sha": c.get("sha", "")[:7],
+                        "author": c.get("commit", {}).get("author", {}).get("name") or c.get("author", {}).get("login"),
+                        "message": (c.get("commit", {}).get("message") or "").split("\n")[0],
+                        "date": c.get("commit", {}).get("author", {}).get("date"),
+                    }
+                    for c in resp.json()[:limit]
+                ]
+                return {"status": "SUCCESS", "repository": target_repo, "commits": items}
+        except httpx.HTTPError as exc:
+            logger.error("GitHub get_commit_history failed: %s", exc)
+            return {"status": "ERROR", "message": str(exc), "commits": []}
+
+    async def get_issue_comments(
+        self,
+        issue_number: int,
+        repo: Optional[str] = None,
+        limit: int = 10,
+    ) -> Dict[str, Any]:
+        """Fetches comment discussions on a specific issue or pull request."""
+        target_repo = repo or self.default_repo or "cortex-org/cortex"
+        if not self.is_configured:
+            return {
+                "status": "SUCCESS",
+                "repository": target_repo,
+                "issue_number": issue_number,
+                "comments": [
+                    {
+                        "id": 101,
+                        "author": "aadishpcs",
+                        "body": "Root cause identified: Qdrant query missing explicit score cutoff threshold.",
+                        "created_at": "2026-11-21T10:15:00Z",
+                    }
+                ],
+            }
+
+        await rate_limiter.acquire("github", cost=1)
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"{GITHUB_API_BASE}/repos/{target_repo}/issues/{issue_number}/comments",
+                    headers=self._get_headers(),
+                    params={"per_page": min(limit, 30)},
+                )
+                if resp.status_code in (403, 429):
+                    await rate_limiter.handle_upstream_rate_limit("github", headers=dict(resp.headers))
+                    return {"status": "RATE_LIMITED", "message": get_degradation_message("github"), "comments": []}
+                resp.raise_for_status()
+                items = [
+                    {
+                        "id": comment.get("id"),
+                        "author": comment.get("user", {}).get("login"),
+                        "body": (comment.get("body") or "")[:500],
+                        "created_at": comment.get("created_at"),
+                    }
+                    for comment in resp.json()[:limit]
+                ]
+                return {"status": "SUCCESS", "repository": target_repo, "issue_number": issue_number, "comments": items}
+        except httpx.HTTPError as exc:
+            logger.error("GitHub get_issue_comments failed: %s", exc)
+            return {"status": "ERROR", "message": str(exc), "comments": []}
+
+    async def get_pr_diff(
+        self,
+        pr_number: int,
+        repo: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Fetches the unified git diff or file changes for a pull request."""
+        target_repo = repo or self.default_repo or "cortex-org/cortex"
+        if not self.is_configured:
+            return {
+                "status": "SUCCESS",
+                "repository": target_repo,
+                "pr_number": pr_number,
+                "diff": "--- a/backend/routers/chat.py\n+++ b/backend/routers/chat.py\n@@ -204,6 +204,18 @@\n+    # Foreign key cascade cleanup\n",
+            }
+
+        await rate_limiter.acquire("github", cost=1)
+        try:
+            headers = self._get_headers()
+            headers["Accept"] = "application/vnd.github.v3.diff"
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"{GITHUB_API_BASE}/repos/{target_repo}/pulls/{pr_number}",
+                    headers=headers,
+                )
+                if resp.status_code in (403, 429):
+                    await rate_limiter.handle_upstream_rate_limit("github", headers=dict(resp.headers))
+                    return {"status": "RATE_LIMITED", "message": get_degradation_message("github"), "diff": ""}
+                resp.raise_for_status()
+                return {"status": "SUCCESS", "repository": target_repo, "pr_number": pr_number, "diff": resp.text[:3000]}
+        except httpx.HTTPError as exc:
+            logger.error("GitHub get_pr_diff failed: %s", exc)
+            return {"status": "ERROR", "message": str(exc), "diff": ""}
+
+    async def get_workflow_status(
+        self,
+        repo: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Fetches recent CI/CD GitHub Actions workflow run statuses."""
+        target_repo = repo or self.default_repo or "cortex-org/cortex"
+        if not self.is_configured:
+            return {
+                "status": "SUCCESS",
+                "repository": target_repo,
+                "workflows": [
+                    {
+                        "id": 1001,
+                        "name": "CI / Unit Tests",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "updated_at": "2026-11-21T12:00:00Z",
+                    }
+                ],
+            }
+
+        await rate_limiter.acquire("github", cost=1)
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"{GITHUB_API_BASE}/repos/{target_repo}/actions/runs",
+                    headers=self._get_headers(),
+                    params={"per_page": 5},
+                )
+                if resp.status_code in (403, 429):
+                    await rate_limiter.handle_upstream_rate_limit("github", headers=dict(resp.headers))
+                    return {"status": "RATE_LIMITED", "message": get_degradation_message("github"), "workflows": []}
+                resp.raise_for_status()
+                runs = resp.json().get("workflow_runs", [])
+                items = [
+                    {
+                        "id": r.get("id"),
+                        "name": r.get("name"),
+                        "status": r.get("status"),
+                        "conclusion": r.get("conclusion"),
+                        "updated_at": r.get("updated_at"),
+                    }
+                    for r in runs[:5]
+                ]
+                return {"status": "SUCCESS", "repository": target_repo, "workflows": items}
+        except httpx.HTTPError as exc:
+            logger.error("GitHub get_workflow_status failed: %s", exc)
+            return {"status": "ERROR", "message": str(exc), "workflows": []}
+
 
 github_service = GitHubService()

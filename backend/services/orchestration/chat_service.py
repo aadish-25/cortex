@@ -14,7 +14,7 @@ from backend.core.config import settings
 from backend.db.database import async_session
 from backend.core.evidence_tokens import create_evidence_token
 from backend.db.redis import redis_manager
-from backend.models.chat import ChatMessage, ChatRole, Conversation, Message, PlanTaskType
+from backend.models.chat import ChatMessage, ChatRole, Conversation, Message, PlanTaskType, ToolAction
 from backend.models.query_quality import QueryQualityLog
 from backend.models.user import User
 from backend.services.memory.command_detector import is_trivial_message
@@ -28,6 +28,43 @@ logger = logging.getLogger(__name__)
 
 # Strict Architectural Invariant (PRD Phase 5.2)
 UNIFORM_FALLBACK_STRING = "I couldn't find verified information in the documents you have access to."
+
+
+def resolve_contextual_fallback(orch_res: Any, user_message: str) -> str:
+    """
+    Produces an informative, truthful fallback response without revealing restricted system details.
+    Distinguishes document gaps from repository misses, external query failures, and ambiguous prompts.
+    """
+    tasks = orch_res.plan.tasks if (orch_res and getattr(orch_res, "plan", None)) else []
+    task_types = [t.type for t in tasks]
+
+    # Check for direct clarification / disambiguation
+    for t in tasks:
+        if t.type == PlanTaskType.DIRECT_CHAT and t.query and any(w in t.query.lower() for w in ("mean", "clarif", "couldn't get")):
+            return t.query
+
+    # GitHub specific
+    if PlanTaskType.GITHUB_SEARCH in task_types and PlanTaskType.INTERNAL_RAG not in task_types:
+        return "I searched the connected repository, but couldn't find matching code, commits, issues, or pull requests."
+
+    # Google Drive specific
+    if PlanTaskType.DRIVE_SEARCH in task_types and PlanTaskType.INTERNAL_RAG not in task_types:
+        return "I searched the connected Google Drive files, but couldn't find relevant documents for your query."
+
+    # SQL / Structured specific
+    if PlanTaskType.STRUCTURED_LOOKUP in task_types and PlanTaskType.INTERNAL_RAG not in task_types:
+        return "I couldn't find any operational records matching your request."
+
+    # External web specific
+    if PlanTaskType.EXTERNAL_WEB in task_types and PlanTaskType.INTERNAL_RAG not in task_types:
+        return "I searched external web sources, but couldn't find relevant information for your query."
+
+    # Compound RAG + GitHub
+    if PlanTaskType.GITHUB_SEARCH in task_types and PlanTaskType.INTERNAL_RAG in task_types:
+        return "I couldn't find matching information across the searched repository and internal company documents."
+
+    # Default Internal RAG: preserve UNIFORM_FALLBACK_STRING
+    return UNIFORM_FALLBACK_STRING
 
 
 class FollowUpSuggestions(BaseModel):
@@ -411,27 +448,19 @@ class ChatService:
             else user_message
         )
 
-        # Emit Step 1/4: Context Normalization & Query Planning (PRD 10.2)
+        # Emit Initial Step: Context Normalization & Query Planning
+        planning_step_payload = {
+            "step": 1,
+            "total_steps": 3,
+            "stage": "planning",
+            "message": "Analyzing inquiry and evaluating context",
+        }
         eid = await redis_manager.append_stream_event(
             stream_key,
             "step",
-            json.dumps({
-                "step": 1,
-                "total_steps": 4,
-                "stage": "planning",
-                "message": "[Step 1/4] Context Normalization & Query Planning",
-            }),
+            json.dumps(planning_step_payload),
         )
-        yield format_sse_frame(
-            "step",
-            {
-                "step": 1,
-                "total_steps": 4,
-                "stage": "planning",
-                "message": "[Step 1/4] Context Normalization & Query Planning",
-            },
-            event_id=eid,
-        )
+        yield format_sse_frame("step", planning_step_payload, event_id=eid)
 
         # 6. Fetch Two-Tier Long-Term Memory
         # Tier 1 (Hot Profile): Authoritative User Profile Context Block
@@ -443,29 +472,6 @@ class ChatService:
             client=client,
             user=user,
             query=effective_query,
-        )
-
-        # Emit Step 2/4: Qdrant Hybrid Search (PRD 10.2)
-        rbac_desc = f"RBAC: {user.department}, {user.clearance_level.value}+"
-        eid = await redis_manager.append_stream_event(
-            stream_key,
-            "step",
-            json.dumps({
-                "step": 2,
-                "total_steps": 4,
-                "stage": "hybrid_search",
-                "message": f"[Step 2/4] Qdrant Hybrid Search ({rbac_desc})",
-            }),
-        )
-        yield format_sse_frame(
-            "step",
-            {
-                "step": 2,
-                "total_steps": 4,
-                "stage": "hybrid_search",
-                "message": f"[Step 2/4] Qdrant Hybrid Search ({rbac_desc})",
-            },
-            event_id=eid,
         )
 
         # 7. Execute Multi-Node DAG Orchestration
@@ -553,28 +559,55 @@ class ChatService:
             )
             yield format_sse_frame("action_card", orch_res.action_draft, event_id=eid)
 
-        # Emit Step 3/4: Cross-Encoder Reranking & Citation Grounding (PRD 10.2)
-        retained_count = len(orch_res.evidence_chunks) or len(orch_res.citations)
-        eid = await redis_manager.append_stream_event(
-            stream_key,
-            "step",
-            json.dumps({
-                "step": 3,
-                "total_steps": 4,
-                "stage": "reranking",
-                "message": f"[Step 3/4] Cross-Encoder Rerank (Top {retained_count} chunks retained)",
-            }),
-        )
-        yield format_sse_frame(
-            "step",
-            {
-                "step": 3,
-                "total_steps": 4,
-                "stage": "reranking",
-                "message": f"[Step 3/4] Cross-Encoder Rerank (Top {retained_count} chunks retained)",
-            },
-            event_id=eid,
-        )
+        # Emit Dynamic Task-Aware Progress Steps
+        tasks = orch_res.plan.tasks
+        total_steps = max(3, len(tasks) + 2)
+        for idx, task in enumerate(tasks, start=2):
+            stage, msg = "executing", "Processing task"
+            if task.type == PlanTaskType.INTERNAL_RAG:
+                stage = "hybrid_search"
+                msg = "Searching workspace knowledge base"
+            elif task.type == PlanTaskType.GITHUB_SEARCH:
+                stage = "github_search"
+                if task.tool_action == ToolAction.GITHUB_COMMIT_HISTORY:
+                    msg = "Fetching repository commit history"
+                elif task.tool_action == ToolAction.GITHUB_ISSUE_COMMENTS:
+                    msg = "Reading issue discussion and comments"
+                elif task.tool_action == ToolAction.GITHUB_PR_DIFF:
+                    msg = "Inspecting pull request code diff"
+                elif task.tool_action == ToolAction.GITHUB_WORKFLOW_STATUS:
+                    msg = "Checking CI/CD workflow status"
+                elif task.tool_action in (ToolAction.GITHUB_SEARCH_CODE, ToolAction.GITHUB_READ_FILE):
+                    msg = "Inspecting repository source files"
+                else:
+                    msg = "Querying connected code repository"
+            elif task.type == PlanTaskType.DRIVE_SEARCH:
+                stage = "drive_search"
+                msg = "Searching Google Drive documents"
+            elif task.type == PlanTaskType.STRUCTURED_LOOKUP:
+                stage = "sql_lookup"
+                msg = "Fetching operational database records"
+            elif task.type == PlanTaskType.EXTERNAL_WEB:
+                stage = "web_search"
+                msg = "Searching verified external sources"
+            elif task.type == PlanTaskType.ACTION_WORKFLOW:
+                stage = "action_workflow"
+                msg = "Preparing actionable workflow draft"
+            elif task.type == PlanTaskType.ADMIN_OPERATION:
+                stage = "admin_operation"
+                msg = "Running administrative diagnostic"
+            elif task.type == PlanTaskType.DIRECT_CHAT:
+                stage = "direct_chat"
+                msg = "Formulating response"
+
+            step_payload = {
+                "step": idx,
+                "total_steps": total_steps,
+                "stage": stage,
+                "message": f"[Step {idx}/{total_steps}] {msg}",
+            }
+            eid = await redis_manager.append_stream_event(stream_key, "step", json.dumps(step_payload))
+            yield format_sse_frame("step", step_payload, event_id=eid)
 
         # Emit Citations event (F4 & F8)
         # Expose only opaque, user-bound evidence references to the browser.
@@ -601,27 +634,28 @@ class ChatService:
         )
         yield format_sse_frame("citations", citations_payload, event_id=eid)
 
-        # Emit Step 4/4: Grounded Streaming Synthesis (PRD 10.2)
+        # Emit DAG Trace event for execution inspection
+        if orch_res.dag_trace:
+            eid = await redis_manager.append_stream_event(
+                stream_key,
+                "dag_trace",
+                json.dumps(orch_res.dag_trace, default=str),
+            )
+            yield format_sse_frame("dag_trace", orch_res.dag_trace, event_id=eid)
+
+        # Emit Final Step: Grounded Streaming Synthesis
+        synth_step_payload = {
+            "step": total_steps,
+            "total_steps": total_steps,
+            "stage": "synthesizing",
+            "message": f"[Step {total_steps}/{total_steps}] Grounded Streaming Synthesis",
+        }
         eid = await redis_manager.append_stream_event(
             stream_key,
             "step",
-            json.dumps({
-                "step": 4,
-                "total_steps": 4,
-                "stage": "synthesizing",
-                "message": "[Step 4/4] Grounded Streaming Synthesis",
-            }),
+            json.dumps(synth_step_payload),
         )
-        yield format_sse_frame(
-            "step",
-            {
-                "step": 4,
-                "total_steps": 4,
-                "stage": "synthesizing",
-                "message": "[Step 4/4] Grounded Streaming Synthesis",
-            },
-            event_id=eid,
-        )
+        yield format_sse_frame("step", synth_step_payload, event_id=eid)
 
         # 8. Grounded Streaming Synthesis
         full_assistant_text = ""
@@ -649,16 +683,16 @@ class ChatService:
             if not orch_res.final_response.strip() or UNIFORM_FALLBACK_STRING in orch_res.final_response:
                 orch_res.final_response = "**Action Notice:** The ticketing workflow service is temporarily unavailable. Please retry your request in a few moments."
 
-        # Check for Low Confidence Fallback Invariant (STRICTLY for document RAG)
-        if orch_res.confidence == ConfidenceLevel.LOW and not orch_res.final_response.strip() and not orch_res.action_draft and not has_non_rag_task:
-            full_assistant_text = UNIFORM_FALLBACK_STRING
+        # Check for Low Confidence or Missing Context Fallback
+        if (orch_res.confidence == ConfidenceLevel.LOW or not orch_res.final_response.strip()) and not orch_res.action_draft and not has_non_rag_task:
+            full_assistant_text = resolve_contextual_fallback(orch_res, user_message)
             generation_complete = True
             eid = await redis_manager.append_stream_event(
                 stream_key,
                 "token",
-                json.dumps({"delta": UNIFORM_FALLBACK_STRING}),
+                json.dumps({"delta": full_assistant_text}),
             )
-            yield format_sse_frame("token", {"delta": UNIFORM_FALLBACK_STRING}, event_id=eid)
+            yield format_sse_frame("token", {"delta": full_assistant_text}, event_id=eid)
         else:
             # Build sandboxed prompt with prompt injection defense
             system_prompt, sandboxed_user_prompt = build_sandboxed_prompt(
@@ -732,12 +766,8 @@ class ChatService:
             except Exception as stream_err:
                 logger.error("Streaming failed (%s); falling back to direct synthesis text", stream_err)
                 if not full_assistant_text:
-                    # Complete miss — use DAG synthesis text
-                    fallback_text = (
-                        "The requested service is temporarily unavailable. Please retry in a few moments."
-                        if has_non_rag_task
-                        else UNIFORM_FALLBACK_STRING
-                    )
+                    # Complete miss — use DAG synthesis text or contextual fallback
+                    fallback_text = resolve_contextual_fallback(orch_res, user_message)
                     full_assistant_text = orch_res.final_response or fallback_text
                     generation_complete = True  # Fallback counts as complete
                     eid = await redis_manager.append_stream_event(
