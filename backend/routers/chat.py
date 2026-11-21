@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from qdrant_client import QdrantClient
 from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import col, delete, select
+from sqlmodel import col, delete, select, update
 
 from backend.core.config import settings
 from backend.core.security import get_current_user
@@ -20,6 +20,8 @@ from backend.models.chat import (
     Message,
     MessageFeedback,
 )
+from backend.models.memory import UserMemory
+from backend.models.query_quality import QueryQualityLog
 from backend.models.enums import FeedbackCategory
 from backend.models.user import User
 from backend.models.pagination import PaginatedResponse
@@ -214,10 +216,41 @@ async def delete_conversation(
     conv = res.scalar_one_or_none()
     if not conv:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found or access denied")
+
+    # 1. Nullify references in query_quality_metrics to preserve telemetry while unblocking deletion
+    await db_session.execute(
+        update(QueryQualityLog)
+        .where(QueryQualityLog.conversation_id == conversation_id)
+        .values(conversation_id=None)
+    )
+
+    # 2. Nullify conversation reference in user_memories
+    await db_session.execute(
+        update(UserMemory)
+        .where(UserMemory.source_conversation_id == conversation_id)
+        .values(source_conversation_id=None)
+    )
+
+    # 3. Handle messages, message feedback, message self-references, and memory message links
     msg_ids = (await db_session.execute(select(Message.id).where(Message.conversation_id == conversation_id))).scalars().all()
     if msg_ids:
+        # Nullify source_message_id in user_memories
+        await db_session.execute(
+            update(UserMemory)
+            .where(UserMemory.source_message_id.in_(msg_ids))
+            .values(source_message_id=None)
+        )
+        # Break self-referencing message chains before deleting messages
+        await db_session.execute(
+            update(Message)
+            .where(Message.conversation_id == conversation_id)
+            .values(parent_message_id=None)
+        )
+        # Delete message feedback and messages
         await db_session.execute(delete(MessageFeedback).where(MessageFeedback.message_id.in_(msg_ids)))
         await db_session.execute(delete(Message).where(Message.conversation_id == conversation_id))
+
+    # 4. Safely delete the conversation row
     await db_session.delete(conv)
     await db_session.commit()
     return {"status": "success", "message": "Conversation deleted successfully"}
