@@ -164,12 +164,13 @@ async def list_documents(
     search: Optional[str] = Query(default=None, max_length=160),
     status_filter: Optional[DocumentStatus] = Query(default=None, alias="status"),
     clearance_level: Optional[ClearanceLevel] = Query(default=None, alias="clearance_level"),
+    only_latest: Optional[bool] = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=100),
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ):
-    """Paginated document directory with role-aware visibility."""
+    """Paginated document directory with role-aware visibility and optional version grouping."""
     docs, total = await list_documents_for_user_page(
         session=session,
         user=current_user,
@@ -177,6 +178,7 @@ async def list_documents(
         search=search,
         status_filter=status_filter,
         clearance_filter=clearance_level,
+        only_latest=bool(only_latest) if only_latest is not None else False,
         page=page,
         page_size=page_size,
     )
@@ -194,6 +196,31 @@ async def list_documents(
         total=total,
         total_pages=(total + page_size - 1) // page_size,
     )
+
+
+@router.get("/{doc_id}/versions", response_model=List[DocumentRead])
+async def list_document_versions(
+    doc_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    """Returns all revisions and historical versions of the specified document."""
+    target_doc = await get_document_by_id(session=session, doc_id=doc_id, user=current_user)
+    stmt = (
+        select(Document)
+        .where(Document.filename == target_doc.filename, Document.department == target_doc.department)
+        .order_by(Document.version.desc())
+    )
+    res = await session.execute(stmt)
+    versions = res.scalars().all()
+    max_ver = max(v.version for v in versions) if versions else target_doc.version
+    return [
+        DocumentRead.model_validate(v).model_copy(update={
+            "is_latest": v.version == max_ver,
+            "has_source_file": bool(v.storage_path and Path(v.storage_path).is_file()),
+        })
+        for v in versions
+    ]
 
 @router.get("/{doc_id}", response_model=DocumentRead)
 async def get_document(

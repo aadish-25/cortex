@@ -1,19 +1,40 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { FileText, Plus, RefreshCw, RotateCcw, ScrollText, Search, Trash2, UploadCloud, X } from 'lucide-react'
+import { FileText, History, Plus, RefreshCw, RotateCcw, ScrollText, Search, Trash2, UploadCloud, X } from 'lucide-react'
 import { api, ApiError } from '../api/client'
 import type { DocumentRecord, Page } from '../api/types'
 import { Modal } from '../components/Modal'
 import { Pagination } from '../components/Pagination'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 
+const DOCS_CACHE_KEY = 'cortex_admin_documents_cache'
+
+function loadSavedDocsCache(): Page<DocumentRecord> | null {
+  try {
+    const raw = sessionStorage.getItem(DOCS_CACHE_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+
+let _docsCache: Page<DocumentRecord> | null = loadSavedDocsCache()
+
+function saveDocsCache(data: Page<DocumentRecord>) {
+  try {
+    _docsCache = data
+    sessionStorage.setItem(DOCS_CACHE_KEY, JSON.stringify(data))
+  } catch {}
+}
+
 export function AdminDocuments() {
-  const [result, setResult] = useState<Page<DocumentRecord> | null>(null)
+  const [result, setResult] = useState<Page<DocumentRecord> | null>(_docsCache)
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState('')
   const [department, setDepartment] = useState('')
   const [clearance, setClearance] = useState('')
-  const [loading, setLoading] = useState(true)
+  const [onlyLatest, setOnlyLatest] = useState(true)
+  const [loading, setLoading] = useState(!_docsCache)
   const [uploadError, setUploadError] = useState('')
   const [toast, setToast] = useState<{ message: string; isError?: boolean } | null>(null)
 
@@ -31,7 +52,6 @@ export function AdminDocuments() {
   const [uploadOpen, setUploadOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<DocumentRecord | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
-  const [uploading, setUploading] = useState(false)
   const [uploadForm, setUploadForm] = useState({ department: 'Engineering', clearance_level: 'Internal', title: '' })
   const [uploadFile, setUploadFile] = useState<File | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
@@ -40,6 +60,12 @@ export function AdminDocuments() {
   const [logsPage, setLogsPage] = useState(1)
   const [logsTotalPages, setLogsTotalPages] = useState(1)
   const [logsLoading, setLogsLoading] = useState(false)
+
+  // Revision drawer state
+  const [versionsTarget, setVersionsTarget] = useState<DocumentRecord | null>(null)
+  const [versionsList, setVersionsList] = useState<DocumentRecord[]>([])
+  const [versionsLoading, setVersionsLoading] = useState(false)
+
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const replaceInput = useRef<HTMLInputElement>(null)
   const uploadFileInputRef = useRef<HTMLInputElement>(null)
@@ -49,7 +75,7 @@ export function AdminDocuments() {
 
   const load = async (
     nextPage = pageRef.current,
-    options?: { search?: string; status?: string; department?: string; clearance?: string },
+    options?: { search?: string; status?: string; department?: string; clearance?: string; onlyLatest?: boolean },
     silent = false
   ) => {
     if (!silent) setLoading(true)
@@ -57,14 +83,17 @@ export function AdminDocuments() {
     const statusFilter = options?.status ?? status
     const deptFilter = options?.department ?? department
     const clearanceFilter = options?.clearance ?? clearance
+    const latestFilter = options?.onlyLatest ?? onlyLatest
     try {
       const params = new URLSearchParams({ page: String(nextPage), page_size: '20' })
       if (searchTerm.trim()) params.set('search', searchTerm.trim())
       if (statusFilter) params.set('status', statusFilter)
       if (deptFilter) params.set('department', deptFilter)
       if (clearanceFilter) params.set('clearance_level', clearanceFilter)
+      if (latestFilter) params.set('only_latest', 'true')
       const data = await api<Page<DocumentRecord>>(`/api/v1/documents/?${params}`)
       setResult(data)
+      saveDocsCache(data)
       setPage(data.page)
     } catch (err) {
       if (!silent) showToast(err instanceof Error ? err.message : 'Could not load documents.', true)
@@ -88,24 +117,57 @@ export function AdminDocuments() {
   async function upload(event: FormEvent) {
     event.preventDefault()
     if (!uploadFile) return
-    setUploading(true)
+
+    const fileToUpload = uploadFile
+    const formValues = { ...uploadForm }
+
+    // Instant modal dismissal (Section 1.10 UX requirement)
+    setUploadOpen(false)
     setUploadError('')
+    setUploadFile(null)
+    setUploadForm({ department: 'Engineering', clearance_level: 'Internal', title: '' })
+
+    // Optimistic row insertion
+    const optimisticDoc: DocumentRecord = {
+      id: `temp-${Date.now()}`,
+      title: formValues.title.trim() || fileToUpload.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' '),
+      filename: fileToUpload.name,
+      department: formValues.department,
+      clearance_level: formValues.clearance_level as any,
+      version: 1,
+      status: 'UPDATING',
+      is_live: false,
+      is_latest: true,
+      has_source_file: true,
+      uploaded_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }
+
+    setResult((prev) => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        items: [optimisticDoc, ...prev.items],
+        total: prev.total + 1,
+      }
+    })
+
+    showToast('Document upload started. Ingestion and indexing underway...')
+
+    // Background asynchronous network transmission
     const form = new FormData()
-    form.append('file', uploadFile)
-    form.append('department', uploadForm.department)
-    form.append('clearance_level', uploadForm.clearance_level)
-    if (uploadForm.title.trim()) form.append('title', uploadForm.title.trim())
+    form.append('file', fileToUpload)
+    form.append('department', formValues.department)
+    form.append('clearance_level', formValues.clearance_level)
+    if (formValues.title.trim()) form.append('title', formValues.title.trim())
+
     try {
       await api('/api/v1/documents/upload', { method: 'POST', body: form })
-      setUploadOpen(false)
-      setUploadFile(null)
-      setUploadForm({ department: 'Engineering', clearance_level: 'Internal', title: '' })
-      showToast('Document uploaded and indexing started.')
+      showToast('Document successfully indexed and published.')
       await load(1, undefined, true)
     } catch (err) {
-      setUploadError(err instanceof Error ? err.message : 'Upload failed.')
-    } finally {
-      setUploading(false)
+      showToast(err instanceof Error ? err.message : 'Document upload failed.', true)
+      await load(1, undefined, true)
     }
   }
 
@@ -134,6 +196,9 @@ export function AdminDocuments() {
         await api<any>(`/api/v1/admin/documents/${doc.id}/rollback`, { method: 'POST' })
         showToast('Previous document version restored.')
         await load(pageRef.current, undefined, true)
+        if (versionsTarget) {
+          void openVersions(doc)
+        }
       }
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'Document action failed.'
@@ -164,175 +229,579 @@ export function AdminDocuments() {
   }
 
   async function openLogs(doc: DocumentRecord, nextPage = 1) {
-    setLogsTarget(doc); setLogsLoading(true)
+    setLogsTarget(doc)
+    setLogsLoading(true)
     try {
       const data = await api<{ items: typeof logs; total_pages: number }>(`/api/v1/admin/documents/${doc.id}/logs?page=${nextPage}&page_size=25`)
-      setLogs(data.items); setLogsPage(nextPage); setLogsTotalPages(data.total_pages)
-    } catch (err) { showToast(err instanceof Error ? err.message : "Could not load document logs.", true) }
-    finally { setLogsLoading(false) }
+      setLogs(data.items)
+      setLogsPage(nextPage)
+      setLogsTotalPages(data.total_pages)
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Could not load document logs.', true)
+    } finally {
+      setLogsLoading(false)
+    }
   }
 
-  return <div className="admin-page">
-    <header className="page-header"><div><p className="eyebrow">KNOWLEDGE BASE</p><h1>Documents</h1><p className="page-subtitle">Manage source files, indexing state and active versions.</p></div><button className="primary-button" onClick={() => setUploadOpen(true)}><Plus size={17} /> Add document</button></header>
-    <section className="panel data-panel">
-      <div className="table-toolbar"><div className="search-field"><Search size={16} /><input placeholder="Search title or filename" value={search} onChange={(e) => { const v = e.target.value; setSearch(v); if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current); searchDebounceRef.current = setTimeout(() => void load(1, { search: v }), 350) }} /></div><div className="toolbar-filters"><select value={department} onChange={(e) => { const value = e.target.value; setDepartment(value); setPage(1); void load(1, { department: value }) }}><option value="">All departments</option><option value="Engineering">Engineering</option><option value="HR">HR</option><option value="Finance">Finance</option><option value="Enterprise">Enterprise</option></select><select value={clearance} onChange={(e) => { const value = e.target.value; setClearance(value); setPage(1); void load(1, { clearance: value }) }}><option value="">All clearances</option><option value="Public">Public</option><option value="Internal">Internal</option><option value="Confidential">Confidential</option></select><select value={status} onChange={(e) => { const value = e.target.value; setStatus(value); setPage(1); void load(1, { status: value }) }}><option value="">All statuses</option><option value="ACTIVE">Active</option><option value="UPDATING">Updating</option><option value="UPDATE_FAILED">Update failed</option></select><span className="count-label">{result?.total ?? 0} documents</span></div></div>
-      <div className="table-scroll"><table className="data-table"><thead><tr><th>Document</th><th>Department</th><th>Clearance</th><th>Version</th><th>Status</th><th>Uploaded</th><th className="actions-col">Actions</th></tr></thead><tbody>
-        {loading && <tr><td colSpan={7} className="table-loading">Loading documents…</td></tr>}
-        {!loading && result?.items.length === 0 && <tr><td colSpan={7} className="table-empty">No documents match these filters.</td></tr>}
-        {!loading && result?.items.map((doc) => <tr key={doc.id}><td><div className="document-cell"><span className="file-icon"><FileText size={17} /></span><span><strong>{doc.title}</strong><small>{doc.filename}</small></span></div></td><td>{doc.department}</td><td><span className={`clearance-tag ${doc.clearance_level.toLowerCase()}`}>{doc.clearance_level}</span></td><td>v{doc.version}</td><td><span className={`status-pill ${doc.status.toLowerCase()}`}>{doc.status.replace('_', ' ')}</span>{!doc.is_live && <small className="status-subline">Not live</small>}</td><td>{new Date(doc.uploaded_at).toLocaleDateString()}</td><td><div className="row-actions"><button className="icon-button small" disabled={busyId === doc.id || doc.status === 'UPDATING' || !doc.is_latest || !doc.has_source_file} onClick={() => void documentAction(doc, 'reindex')} title="Reindex"><RefreshCw size={15} /></button><button className="icon-button small" disabled={busyId === doc.id || !doc.is_latest || doc.status === 'UPDATING'} onClick={() => { replaceTarget.current = doc; replaceInput.current?.click() }} title="Replace version"><UploadCloud size={15} /></button><button className="icon-button small" disabled={busyId === doc.id || !doc.is_latest} onClick={() => void documentAction(doc, 'rollback')} title="Restore previous version"><RotateCcw size={15} /></button><button className="icon-button small" onClick={() => void openLogs(doc)} title="Processing history"><ScrollText size={15} /></button><button className="icon-button small danger" disabled={busyId === doc.id || isDeleting} onClick={() => setDeleteTarget(doc)} title="Delete"><Trash2 size={15} /></button></div></td></tr>)}
-      </tbody></table></div>
-      {result && <Pagination page={result.page} totalPages={result.total_pages} onChange={(next) => void load(next)} />}
-    </section>
-    <input ref={replaceInput} type="file" accept=".pdf,.docx,.md,.txt" hidden onChange={(e) => { const file = e.target.files?.[0]; if (file) void replaceDocument(file) }} />
-    {uploadOpen && (
-      <Modal title="Add a source document" onClose={() => setUploadOpen(false)}>
-        <form className="stack-form" onSubmit={upload}>
-          <div>
-            <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text)', display: 'block', marginBottom: 6 }}>Source document file *</span>
+  async function openVersions(doc: DocumentRecord) {
+    setVersionsTarget(doc)
+    setVersionsLoading(true)
+    try {
+      const data = await api<DocumentRecord[]>(`/api/v1/documents/${doc.id}/versions`)
+      setVersionsList(data)
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Could not load document revisions.', true)
+    } finally {
+      setVersionsLoading(false)
+    }
+  }
+
+  return (
+    <div className="admin-page">
+      <header className="page-header">
+        <div>
+          <p className="eyebrow">KNOWLEDGE BASE</p>
+          <h1>Documents</h1>
+          <p className="page-subtitle">Manage source files, indexing state, and version revisions.</p>
+        </div>
+        <button className="primary-button" onClick={() => setUploadOpen(true)}>
+          <Plus size={17} /> Add document
+        </button>
+      </header>
+
+      <section className="panel data-panel">
+        <div className="table-toolbar">
+          <div className="search-field">
+            <Search size={16} />
             <input
-              ref={uploadFileInputRef}
-              type="file"
-              accept=".pdf,.docx,.md,.txt"
-              hidden
+              placeholder="Search title or filename"
+              value={search}
               onChange={(e) => {
-                const f = e.target.files?.[0] || null
-                setUploadFile(f)
-                if (f && !uploadForm.title.trim()) {
-                  const cleanName = f.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ')
-                  setUploadForm((prev) => ({ ...prev, title: cleanName }))
-                }
+                const v = e.target.value
+                setSearch(v)
+                if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
+                searchDebounceRef.current = setTimeout(() => void load(1, { search: v }), 350)
               }}
             />
-            {!uploadFile ? (
-              <div
-                className="file-dropzone-button"
-                onClick={() => uploadFileInputRef.current?.click()}
-                style={{
-                  border: '2px dashed var(--border-strong)',
-                  borderRadius: 10,
-                  padding: '24px 16px',
-                  background: 'var(--surface-soft)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 8,
-                  cursor: 'pointer',
-                  transition: 'border-color 0.2s, background 0.2s',
+          </div>
+          <div className="toolbar-filters">
+            <select
+              value={department}
+              onChange={(e) => {
+                const value = e.target.value
+                setDepartment(value)
+                setPage(1)
+                void load(1, { department: value })
+              }}
+            >
+              <option value="">All departments</option>
+              <option value="Engineering">Engineering</option>
+              <option value="HR">HR</option>
+              <option value="Finance">Finance</option>
+              <option value="Enterprise">Enterprise</option>
+            </select>
+            <select
+              value={clearance}
+              onChange={(e) => {
+                const value = e.target.value
+                setClearance(value)
+                setPage(1)
+                void load(1, { clearance: value })
+              }}
+            >
+              <option value="">All clearances</option>
+              <option value="Public">Public</option>
+              <option value="Internal">Internal</option>
+              <option value="Confidential">Confidential</option>
+            </select>
+            <select
+              value={status}
+              onChange={(e) => {
+                const value = e.target.value
+                setStatus(value)
+                setPage(1)
+                void load(1, { status: value })
+              }}
+            >
+              <option value="">All statuses</option>
+              <option value="ACTIVE">Active</option>
+              <option value="UPDATING">Updating</option>
+              <option value="UPDATE_FAILED">Update failed</option>
+            </select>
+
+            {/* Version Grouping Toggle */}
+            <label
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                fontSize: 13,
+                cursor: 'pointer',
+                color: 'var(--text-secondary, #4b5563)',
+                paddingLeft: 4,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={onlyLatest}
+                onChange={(e) => {
+                  const val = e.target.checked
+                  setOnlyLatest(val)
+                  setPage(1)
+                  void load(1, { onlyLatest: val })
                 }}
-              >
-                <div style={{ width: 42, height: 42, borderRadius: 10, background: 'var(--primary-soft)', color: 'var(--primary)', display: 'grid', placeItems: 'center' }}>
-                  <UploadCloud size={22} />
+              />
+              <span>Latest version only</span>
+            </label>
+
+            <span className="count-label">{result?.total ?? 0} documents</span>
+          </div>
+        </div>
+
+        <div className="table-scroll">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Document</th>
+                <th>Department</th>
+                <th>Clearance</th>
+                <th>Version</th>
+                <th>Status</th>
+                <th>Uploaded</th>
+                <th className="actions-col">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading && (
+                <tr>
+                  <td colSpan={7} className="table-loading">
+                    Loading documents…
+                  </td>
+                </tr>
+              )}
+              {!loading && result?.items.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="table-empty">
+                    No documents match these filters.
+                  </td>
+                </tr>
+              )}
+              {!loading &&
+                result?.items.map((doc) => (
+                  <tr key={doc.id}>
+                    <td>
+                      <div className="document-cell">
+                        <span className="file-icon">
+                          <FileText size={17} />
+                        </span>
+                        <span>
+                          <strong>{doc.title}</strong>
+                          <small>{doc.filename}</small>
+                        </span>
+                      </div>
+                    </td>
+                    <td>{doc.department}</td>
+                    <td>
+                      <span className={`clearance-tag ${doc.clearance_level.toLowerCase()}`}>
+                        {doc.clearance_level}
+                      </span>
+                    </td>
+                    <td>
+                      <button
+                        className="version-pill-btn"
+                        onClick={() => void openVersions(doc)}
+                        title="View revision history"
+                        style={{
+                          background: doc.is_latest ? 'rgba(79, 70, 229, 0.1)' : 'var(--bg-secondary, #f3f4f6)',
+                          color: doc.is_latest ? 'var(--primary-color, #4f46e5)' : 'var(--text-secondary, #6b7280)',
+                          border: 'none',
+                          borderRadius: 6,
+                          padding: '2px 8px',
+                          fontSize: 12,
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4,
+                        }}
+                      >
+                        <span>v{doc.version}</span>
+                        <History size={11} />
+                      </button>
+                    </td>
+                    <td>
+                      <span className={`status-pill ${doc.status.toLowerCase()}`}>
+                        {doc.status.replace('_', ' ')}
+                      </span>
+                      {!doc.is_live && <small className="status-subline">Not live</small>}
+                    </td>
+                    <td>{new Date(doc.uploaded_at).toLocaleDateString()}</td>
+                    <td>
+                      <div className="row-actions">
+                        <button
+                          className="icon-button small"
+                          disabled={busyId === doc.id || doc.status === 'UPDATING' || !doc.is_latest || !doc.has_source_file}
+                          onClick={() => void documentAction(doc, 'reindex')}
+                          title="Reindex"
+                        >
+                          <RefreshCw size={15} />
+                        </button>
+                        <button
+                          className="icon-button small"
+                          disabled={busyId === doc.id || !doc.is_latest || doc.status === 'UPDATING'}
+                          onClick={() => {
+                            replaceTarget.current = doc
+                            replaceInput.current?.click()
+                          }}
+                          title="Replace version"
+                        >
+                          <UploadCloud size={15} />
+                        </button>
+                        <button
+                          className="icon-button small"
+                          disabled={busyId === doc.id || !doc.is_latest}
+                          onClick={() => void documentAction(doc, 'rollback')}
+                          title="Restore previous version"
+                        >
+                          <RotateCcw size={15} />
+                        </button>
+                        <button
+                          className="icon-button small"
+                          onClick={() => void openLogs(doc)}
+                          title="Processing history"
+                        >
+                          <ScrollText size={15} />
+                        </button>
+                        <button
+                          className="icon-button small danger"
+                          disabled={busyId === doc.id || isDeleting}
+                          onClick={() => setDeleteTarget(doc)}
+                          title="Delete"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+        {result && <Pagination page={result.page} totalPages={result.total_pages} onChange={(next) => void load(next)} />}
+      </section>
+
+      <input
+        ref={replaceInput}
+        type="file"
+        accept=".pdf,.docx,.md,.txt"
+        hidden
+        onChange={(e) => {
+          const file = e.target.files?.[0]
+          if (file) void replaceDocument(file)
+        }}
+      />
+
+      {/* Ingestion Modal with Instant Dismissal & Strict Department Select */}
+      {uploadOpen && (
+        <Modal title="Add a source document" onClose={() => setUploadOpen(false)}>
+          <form className="stack-form" onSubmit={upload}>
+            <div>
+              <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text)', display: 'block', marginBottom: 6 }}>
+                Source document file *
+              </span>
+              <input
+                ref={uploadFileInputRef}
+                type="file"
+                accept=".pdf,.docx,.md,.txt"
+                hidden
+                onChange={(e) => {
+                  const f = e.target.files?.[0] || null
+                  setUploadFile(f)
+                  if (f && !uploadForm.title.trim()) {
+                    const cleanName = f.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ')
+                    setUploadForm((prev) => ({ ...prev, title: cleanName }))
+                  }
+                }}
+              />
+              {!uploadFile ? (
+                <div
+                  className="file-dropzone-button"
+                  onClick={() => uploadFileInputRef.current?.click()}
+                  style={{
+                    border: '2px dashed var(--border-strong)',
+                    borderRadius: 10,
+                    padding: '24px 16px',
+                    background: 'var(--surface-soft)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 8,
+                    cursor: 'pointer',
+                    transition: 'border-color 0.2s, background 0.2s',
+                  }}
+                >
+                  <div style={{ width: 42, height: 42, borderRadius: 10, background: 'var(--primary-soft)', color: 'var(--primary)', display: 'grid', placeItems: 'center' }}>
+                    <UploadCloud size={22} />
+                  </div>
+                  <strong style={{ fontSize: 13, color: 'var(--text)' }}>Choose file to upload</strong>
+                  <small style={{ color: 'var(--muted)', fontSize: 11 }}>PDF, DOCX, Markdown, or TXT documents</small>
                 </div>
-                <strong style={{ fontSize: 13, color: 'var(--text)' }}>Choose file to upload</strong>
-                <small style={{ color: 'var(--muted)', fontSize: 11 }}>PDF, DOCX, Markdown, or TXT documents</small>
+              ) : (
+                <div
+                  style={{
+                    border: '1px solid var(--border)',
+                    borderRadius: 10,
+                    padding: '12px 14px',
+                    background: 'var(--surface)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 12,
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                    <div style={{ width: 36, height: 36, borderRadius: 8, background: 'var(--primary-soft)', color: 'var(--primary)', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
+                      <FileText size={18} />
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      <strong style={{ fontSize: 12, color: 'var(--text)', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {uploadFile.name}
+                      </strong>
+                      <small style={{ color: 'var(--muted)', fontSize: 11 }}>
+                        {(uploadFile.size / 1024).toFixed(1)} KB
+                      </small>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <button
+                      type="button"
+                      className="secondary-button compact-button"
+                      style={{ fontSize: 11, padding: '3px 8px', height: 26 }}
+                      onClick={() => uploadFileInputRef.current?.click()}
+                    >
+                      Change
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-button small danger"
+                      style={{ width: 26, height: 26 }}
+                      onClick={() => {
+                        setUploadFile(null)
+                        if (uploadFileInputRef.current) uploadFileInputRef.current.value = ''
+                      }}
+                      title="Remove file"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <label>
+              Title
+              <input
+                value={uploadForm.title}
+                onChange={(e) => setUploadForm((f) => ({ ...f, title: e.target.value }))}
+                placeholder="Leave blank to use filename"
+              />
+            </label>
+
+            <div className="form-grid">
+              <label>
+                Department *
+                <select
+                  value={uploadForm.department}
+                  onChange={(e) => setUploadForm((f) => ({ ...f, department: e.target.value }))}
+                  required
+                >
+                  <option value="Engineering">Engineering</option>
+                  <option value="HR">HR</option>
+                  <option value="Finance">Finance</option>
+                  <option value="Enterprise">Enterprise</option>
+                </select>
+              </label>
+
+              <label>
+                Clearance
+                <select
+                  value={uploadForm.clearance_level}
+                  onChange={(e) => setUploadForm((f) => ({ ...f, clearance_level: e.target.value }))}
+                >
+                  <option value="Public">Public</option>
+                  <option value="Internal">Internal</option>
+                  <option value="Confidential">Confidential</option>
+                </select>
+              </label>
+            </div>
+
+            <p className="form-help">
+              The file is securely registered and indexed into Qdrant. Modal dismisses instantly and indexing status will show live in the table.
+            </p>
+
+            {uploadError && <div className="inline-error">{uploadError}</div>}
+
+            <div className="modal-actions">
+              <button type="button" className="secondary-button" onClick={() => setUploadOpen(false)}>
+                Cancel
+              </button>
+              <button type="submit" className="primary-button" disabled={!uploadFile}>
+                Upload and index
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* Revision History Drawer / Modal */}
+      {versionsTarget && (
+        <Modal
+          title={`Revision History · ${versionsTarget.title}`}
+          onClose={() => setVersionsTarget(null)}
+          wide
+        >
+          <div style={{ padding: '8px 0' }}>
+            <p style={{ fontSize: 13, color: 'var(--text-secondary, #6b7280)', marginBottom: 16 }}>
+              Historical versions and staged revisions for <strong>{versionsTarget.filename}</strong> ({versionsTarget.department}).
+            </p>
+
+            {versionsLoading ? (
+              <div className="table-loading" style={{ padding: 24, textAlign: 'center' }}>
+                Loading revisions…
+              </div>
+            ) : versionsList.length === 0 ? (
+              <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-secondary, #6b7280)' }}>
+                No revision history found.
               </div>
             ) : (
-              <div
-                style={{
-                  border: '1px solid var(--border)',
-                  borderRadius: 10,
-                  padding: '12px 14px',
-                  background: 'var(--surface)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 12,
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-                  <div style={{ width: 36, height: 36, borderRadius: 8, background: 'var(--primary-soft)', color: 'var(--primary)', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
-                    <FileText size={18} />
-                  </div>
-                  <div style={{ minWidth: 0 }}>
-                    <strong style={{ fontSize: 12, color: 'var(--text)', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {uploadFile.name}
-                    </strong>
-                    <small style={{ color: 'var(--muted)', fontSize: 11 }}>
-                      {(uploadFile.size / 1024).toFixed(1)} KB
-                    </small>
-                  </div>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <button
-                    type="button"
-                    className="secondary-button compact-button"
-                    style={{ fontSize: 11, padding: '3px 8px', height: 26 }}
-                    onClick={() => uploadFileInputRef.current?.click()}
-                  >
-                    Change
-                  </button>
-                  <button
-                    type="button"
-                    className="icon-button small danger"
-                    style={{ width: 26, height: 26 }}
-                    onClick={() => {
-                      setUploadFile(null)
-                      if (uploadFileInputRef.current) uploadFileInputRef.current.value = ''
-                    }}
-                    title="Remove file"
-                  >
-                    <Trash2 size={13} />
-                  </button>
-                </div>
+              <div className="table-wrapper">
+                <table className="admin-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid var(--border-color, #e5e7eb)', textAlign: 'left', color: 'var(--text-secondary, #6b7280)' }}>
+                      <th style={{ padding: '8px 12px' }}>Version</th>
+                      <th style={{ padding: '8px 12px' }}>Clearance</th>
+                      <th style={{ padding: '8px 12px' }}>Status</th>
+                      <th style={{ padding: '8px 12px' }}>Uploaded</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'right' }}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {versionsList.map((ver) => (
+                      <tr key={ver.id} style={{ borderBottom: '1px solid var(--border-color, #f3f4f6)' }}>
+                        <td style={{ padding: '10px 12px', fontWeight: 600 }}>
+                          v{ver.version} {ver.is_latest && <span style={{ fontSize: 10, background: 'rgba(16, 185, 129, 0.1)', color: '#10b981', padding: '2px 6px', borderRadius: 4, marginLeft: 6 }}>LATEST</span>}
+                        </td>
+                        <td style={{ padding: '10px 12px' }}>{ver.clearance_level}</td>
+                        <td style={{ padding: '10px 12px' }}>
+                          <span className={`status-pill ${ver.status.toLowerCase()}`}>
+                            {ver.status.replace('_', ' ')}
+                          </span>
+                        </td>
+                        <td style={{ padding: '10px 12px' }}>{new Date(ver.uploaded_at).toLocaleString()}</td>
+                        <td style={{ padding: '10px 12px', textAlign: 'right' }}>
+                          {!ver.is_latest && (
+                            <button
+                              className="secondary-button compact-button"
+                              style={{ fontSize: 11, padding: '3px 8px' }}
+                              disabled={busyId === ver.id}
+                              onClick={() => void documentAction(ver, 'rollback')}
+                            >
+                              Restore v{ver.version}
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )}
           </div>
-          <label>Title<input value={uploadForm.title} onChange={(e) => setUploadForm((f) => ({ ...f, title: e.target.value }))} placeholder="Leave blank to use filename" /></label>
-          <div className="form-grid"><label>Department<input value={uploadForm.department} onChange={(e) => setUploadForm((f) => ({ ...f, department: e.target.value }))} required /></label><label>Clearance<select value={uploadForm.clearance_level} onChange={(e) => setUploadForm((f) => ({ ...f, clearance_level: e.target.value }))}><option>Public</option><option>Internal</option><option>Confidential</option></select></label></div>
-          <p className="form-help">The file is stored server-side so it can be safely reindexed later.</p>
-          {uploadError && <div className="inline-error">{uploadError}</div>}
-          <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setUploadOpen(false)}>Cancel</button><button type="submit" className="primary-button" disabled={!uploadFile || uploading}>{uploading ? 'Uploading…' : 'Upload and index'}</button></div>
-        </form>
-      </Modal>
-    )}
-    {deleteTarget && (
-      <ConfirmDialog
-        title="Delete document?"
-        message={
-          <span>
-            Are you sure you want to delete &ldquo;<strong>{deleteTarget.title}</strong>&rdquo; and its indexed content? This action cannot be undone.
-          </span>
-        }
-        confirmText="Delete document"
-        confirmVariant="danger"
-        isBusy={isDeleting}
-        onCancel={() => {
-          if (!isDeleting) setDeleteTarget(null)
-        }}
-        onConfirm={async () => {
-          setIsDeleting(true)
-          try {
-            await api(`/api/v1/documents/${deleteTarget.id}`, { method: 'DELETE' })
-            showToast('Document deleted.')
-            setDeleteTarget(null)
-            await load(pageRef.current, undefined, true)
-          } catch (err) {
-            const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'Document deletion failed.'
-            showToast(msg, true)
-          } finally {
-            setIsDeleting(false)
+        </Modal>
+      )}
+
+      {/* Delete Confirmation Dialog */}
+      {deleteTarget && (
+        <ConfirmDialog
+          title="Delete document?"
+          message={
+            <span>
+              Are you sure you want to delete &ldquo;<strong>{deleteTarget.title}</strong>&rdquo; and its indexed content? This action cannot be undone.
+            </span>
           }
-        }}
-      />
-    )}
-    {logsTarget && <Modal title={`Processing history · ${logsTarget.title}`} onClose={() => setLogsTarget(null)} wide><div className="document-log-list">{logsLoading && <div className="table-loading">Loading processing history…</div>}{!logsLoading && logs.length === 0 && <div className="empty-state compact"><ScrollText size={22} /><p>No processing events have been recorded for this document.</p></div>}{!logsLoading && logs.map((log) => <div className="document-log-row" key={log.id}><span className={`log-status ${log.status.toLowerCase()}`} /><div><div className="document-log-meta"><strong>{log.stage.replace('_', ' ')}</strong><span>{log.status}</span><small>{new Date(log.created_at).toLocaleString()}</small></div><p>{log.message}</p></div></div>)}<Pagination page={logsPage} totalPages={logsTotalPages} onChange={(next) => void openLogs(logsTarget, next)} /></div></Modal>}
-    {toast && (
-      <div
-        className="toast-message"
-        style={{
-          borderColor: toast.isError ? 'var(--danger)' : 'var(--border)',
-          color: toast.isError ? 'var(--danger)' : 'var(--text)',
-          background: 'var(--surface)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-        }}
-      >
-        {toast.isError && <span>⚠️</span>}
-        <span>{toast.message}</span>
-        <button onClick={() => setToast(null)} aria-label="Dismiss"><X size={14} /></button>
-      </div>
-    )}
-  </div>
+          confirmText="Delete document"
+          confirmVariant="danger"
+          isBusy={isDeleting}
+          onCancel={() => {
+            if (!isDeleting) setDeleteTarget(null)
+          }}
+          onConfirm={async () => {
+            setIsDeleting(true)
+            try {
+              await api(`/api/v1/documents/${deleteTarget.id}`, { method: 'DELETE' })
+              showToast('Document deleted.')
+              setDeleteTarget(null)
+              await load(pageRef.current, undefined, true)
+            } catch (err) {
+              const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'Document deletion failed.'
+              showToast(msg, true)
+            } finally {
+              setIsDeleting(false)
+            }
+          }}
+        />
+      )}
+
+      {/* Logs Modal */}
+      {logsTarget && (
+        <Modal title={`Processing history · ${logsTarget.title}`} onClose={() => setLogsTarget(null)} wide>
+          <div className="document-log-list">
+            {logsLoading && <div className="table-loading">Loading processing history…</div>}
+            {!logsLoading && logs.length === 0 && (
+              <div className="empty-state compact">
+                <ScrollText size={22} />
+                <p>No processing events have been recorded for this document.</p>
+              </div>
+            )}
+            {!logsLoading &&
+              logs.map((log) => (
+                <div className="document-log-row" key={log.id}>
+                  <span className={`log-status ${log.status.toLowerCase()}`} />
+                  <div>
+                    <div className="document-log-meta">
+                      <strong>{log.stage.replace('_', ' ')}</strong>
+                      <span>{log.status}</span>
+                      <small>{new Date(log.created_at).toLocaleString()}</small>
+                    </div>
+                    <p>{log.message}</p>
+                  </div>
+                </div>
+              ))}
+            <Pagination page={logsPage} totalPages={logsTotalPages} onChange={(next) => void openLogs(logsTarget, next)} />
+          </div>
+        </Modal>
+      )}
+
+      {toast && (
+        <div
+          className="toast-message"
+          style={{
+            borderColor: toast.isError ? 'var(--danger)' : 'var(--border)',
+            color: toast.isError ? 'var(--danger)' : 'var(--text)',
+            background: 'var(--surface)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+          }}
+        >
+          {toast.isError && <span>⚠️</span>}
+          <span>{toast.message}</span>
+          <button onClick={() => setToast(null)} aria-label="Dismiss">
+            <X size={14} />
+          </button>
+        </div>
+      )}
+    </div>
+  )
 }

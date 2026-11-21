@@ -304,6 +304,7 @@ async def list_documents_for_user_page(
     search: Optional[str] = None,
     status_filter: Optional[DocumentStatus] = None,
     clearance_filter: Optional[ClearanceLevel] = None,
+    only_latest: bool = False,
     page: int = 1,
     page_size: int = 25,
 ) -> Tuple[List[Document], int]:
@@ -337,6 +338,21 @@ async def list_documents_for_user_page(
 
     count_stmt = select(func.count(Document.id))
     data_stmt = select(Document)
+
+    if only_latest:
+        latest_subq = (
+            select(Document.filename, Document.department, func.max(Document.version).label("max_ver"))
+            .group_by(Document.filename, Document.department)
+            .subquery()
+        )
+        join_cond = and_(
+            Document.filename == latest_subq.c.filename,
+            Document.department == latest_subq.c.department,
+            Document.version == latest_subq.c.max_ver,
+        )
+        count_stmt = count_stmt.join(latest_subq, join_cond)
+        data_stmt = data_stmt.join(latest_subq, join_cond)
+
     if conditions:
         count_stmt = count_stmt.where(*conditions)
         data_stmt = data_stmt.where(*conditions)
