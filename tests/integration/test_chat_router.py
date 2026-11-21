@@ -7,9 +7,12 @@ from backend.core.security import create_access_token
 from backend.db.database import async_session, init_db
 from backend.db.qdrant import get_qdrant_client, init_user_memories_collection
 from backend.main import app
-from backend.models.chat import Conversation, Message
+from backend.models.chat import Conversation, Message, MessageFeedback
+from backend.models.memory import UserMemory
+from backend.models.query_quality import QueryQualityLog
 from backend.models.enums import ClearanceLevel, FeedbackCategory, Role
 from backend.models.user import User
+from sqlmodel import select
 
 
 @pytest.fixture(autouse=True)
@@ -458,3 +461,158 @@ async def test_send_chat_message_with_client_message_id(auth_headers, test_user)
         )
         assert res.status_code == 200
         assert "text/event-stream" in res.headers["content-type"]
+
+
+@pytest.mark.asyncio
+async def test_delete_conversation_cascades_safely(auth_headers, test_user):
+    """
+    Verifies that deleting a conversation cleanly cleans up messages, feedback,
+    breaks parent-child message chains, and nullifies references in memories
+    and query quality logs without triggering foreign key violations.
+    """
+    conv_id = uuid.uuid4()
+    msg1_id = uuid.uuid4()
+    msg2_id = uuid.uuid4()
+    mem_id = uuid.uuid4()
+    qual_id = uuid.uuid4()
+
+    async with async_session() as session:
+        conv = Conversation(
+            id=conv_id,
+            user_id=test_user.id,
+            title="Conversation To Delete",
+        )
+        msg1 = Message(
+            id=msg1_id,
+            conversation_id=conv_id,
+            sender="user",
+            content="Hello Cortex",
+        )
+        msg2 = Message(
+            id=msg2_id,
+            conversation_id=conv_id,
+            parent_message_id=msg1_id,
+            sender="assistant",
+            content="Hello user, here is your answer.",
+        )
+        fb = MessageFeedback(
+            message_id=msg2_id,
+            user_id=test_user.id,
+            is_thumbs_up=True,
+            comment="Helpful",
+        )
+        memory = UserMemory(
+            id=mem_id,
+            user_id=test_user.id,
+            category="preference",
+            fact="Prefers concise code",
+            source_conversation_id=conv_id,
+            source_message_id=msg2_id,
+            status="active",
+            confidence_score=0.95,
+        )
+        quality = QueryQualityLog(
+            id=qual_id,
+            user_id=test_user.id,
+            conversation_id=conv_id,
+            query_preview="Hello Cortex",
+            confidence="HIGH",
+        )
+        session.add(conv)
+        session.add(msg1)
+        session.add(msg2)
+        session.add(fb)
+        session.add(memory)
+        session.add(quality)
+        await session.commit()
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.delete(
+            f"/api/v1/chat/conversations/{conv_id}",
+            headers=auth_headers,
+        )
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "success"
+
+    # Verify database state after deletion
+    async with async_session() as session:
+        # Conversation is deleted
+        db_conv = (await session.execute(select(Conversation).where(Conversation.id == conv_id))).scalar_one_or_none()
+        assert db_conv is None
+
+        # Messages are deleted
+        db_msgs = (await session.execute(select(Message).where(Message.conversation_id == conv_id))).scalars().all()
+        assert len(db_msgs) == 0
+
+        # Feedback is deleted
+        db_fb = (await session.execute(select(MessageFeedback).where(MessageFeedback.message_id == msg2_id))).scalar_one_or_none()
+        assert db_fb is None
+
+        # Memory is preserved but unlinked from the deleted conversation & message
+        db_mem = (await session.execute(select(UserMemory).where(UserMemory.id == mem_id))).scalar_one_or_none()
+        assert db_mem is not None
+        assert db_mem.source_conversation_id is None
+        assert db_mem.source_message_id is None
+
+        # Query quality log is preserved but unlinked
+        db_qual = (await session.execute(select(QueryQualityLog).where(QueryQualityLog.id == qual_id))).scalar_one_or_none()
+        assert db_qual is not None
+        assert db_qual.conversation_id is None
+
+
+@pytest.mark.asyncio
+async def test_delete_conversation_cross_user_forbidden(auth_headers, test_user):
+    """Verifies that User B cannot delete User A's conversation."""
+    conv_id = uuid.uuid4()
+    async with async_session() as session:
+        other_user = User(
+            name="Alice Peer",
+            username=f"alice_{uuid.uuid4().hex[:6]}",
+            email=f"alice_{uuid.uuid4().hex[:6]}@cortex.local",
+            hashed_password="hash",
+            role=Role.EMPLOYEE,
+            department="Engineering",
+            clearance_level=ClearanceLevel.INTERNAL,
+            token_version=1,
+            is_active=True,
+        )
+        session.add(other_user)
+        await session.commit()
+        await session.refresh(other_user)
+
+        conv = Conversation(
+            id=conv_id,
+            user_id=other_user.id,
+            title="Alice Private Discussion",
+        )
+        session.add(conv)
+        await session.commit()
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # test_user attempts to delete Alice's conversation
+        res = await client.delete(
+            f"/api/v1/chat/conversations/{conv_id}",
+            headers=auth_headers,
+        )
+        assert res.status_code == 404
+
+    # Conversation still exists in db
+    async with async_session() as session:
+        db_conv = (await session.execute(select(Conversation).where(Conversation.id == conv_id))).scalar_one_or_none()
+        assert db_conv is not None
+
+
+@pytest.mark.asyncio
+async def test_delete_conversation_not_found(auth_headers):
+    """Verifies 404 when deleting a non-existent conversation."""
+    non_existent_id = uuid.uuid4()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.delete(
+            f"/api/v1/chat/conversations/{non_existent_id}",
+            headers=auth_headers,
+        )
+        assert res.status_code == 404
