@@ -3,6 +3,7 @@ import { Bell, Check, Mail, Trash2, UserPlus, X } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { api, ApiError } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 
 interface NotificationItem {
   id: string
@@ -33,6 +34,7 @@ export function AdminNotificationBell() {
   const [open, setOpen] = useState(false)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
   const [toast, setToast] = useState('')
+  const [rejectReqId, setRejectReqId] = useState<string | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -82,21 +84,21 @@ export function AdminNotificationBell() {
       setToast(`Email updated to ${requestedEmail}`)
       await loadNotifications()
     } catch (err) {
-      alert(err instanceof ApiError ? err.message : 'Could not approve email change.')
+      setToast(err instanceof ApiError ? err.message : 'Could not approve email change.')
     } finally {
       setActionLoading(null)
     }
   }
 
-  async function handleRejectEmail(reqId: string) {
-    if (!window.confirm('Reject this email revision request?')) return
+  async function handleConfirmRejectEmail(reqId: string) {
     setActionLoading(reqId)
     try {
       await api(`/api/v1/admin/email-requests/${reqId}/reject`, { method: 'POST' })
       setToast('Email revision request rejected.')
+      setRejectReqId(null)
       await loadNotifications()
     } catch (err) {
-      alert(err instanceof ApiError ? err.message : 'Could not reject request.')
+      setToast(err instanceof ApiError ? err.message : 'Could not reject request.')
     } finally {
       setActionLoading(null)
     }
@@ -225,7 +227,7 @@ export function AdminNotificationBell() {
                           className="secondary-button danger compact-button"
                           style={{ fontSize: 11, padding: '3px 8px', height: 24 }}
                           disabled={actionLoading === item.request_id}
-                          onClick={() => handleRejectEmail(item.request_id!)}
+                          onClick={() => setRejectReqId(item.request_id!)}
                         >
                           <Trash2 size={12} /> Reject
                         </button>
@@ -250,6 +252,18 @@ export function AdminNotificationBell() {
             </div>
           </div>
         </>
+      )}
+
+      {rejectReqId && (
+        <ConfirmDialog
+          title="Reject email revision request?"
+          message="Are you sure you want to reject this corporate email revision request?"
+          confirmText="Reject request"
+          confirmVariant="danger"
+          isBusy={Boolean(actionLoading)}
+          onCancel={() => { if (!actionLoading) setRejectReqId(null) }}
+          onConfirm={() => void handleConfirmRejectEmail(rejectReqId)}
+        />
       )}
 
       {toast && (

@@ -4,6 +4,7 @@ import { api, ApiError } from '../api/client'
 import type { DocumentRecord, Page } from '../api/types'
 import { Modal } from '../components/Modal'
 import { Pagination } from '../components/Pagination'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 
 export function AdminDocuments() {
   const [result, setResult] = useState<Page<DocumentRecord> | null>(null)
@@ -28,6 +29,8 @@ export function AdminDocuments() {
   }
 
   const [uploadOpen, setUploadOpen] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<DocumentRecord | null>(null)
+  const [isDeleting, setIsDeleting] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [uploadForm, setUploadForm] = useState({ department: 'Engineering', clearance_level: 'Internal', title: '' })
   const [uploadFile, setUploadFile] = useState<File | null>(null)
@@ -106,15 +109,10 @@ export function AdminDocuments() {
     }
   }
 
-  async function documentAction(doc: DocumentRecord, action: 'reindex' | 'rollback' | 'delete') {
-    if (action === 'delete' && !window.confirm(`Delete “${doc.title}” and its indexed content?`)) return
+  async function documentAction(doc: DocumentRecord, action: 'reindex' | 'rollback') {
     setBusyId(doc.id)
     try {
-      if (action === 'delete') {
-        await api(`/api/v1/documents/${doc.id}`, { method: 'DELETE' })
-        showToast('Document deleted.')
-        await load(pageRef.current, undefined, true)
-      } else if (action === 'reindex') {
+      if (action === 'reindex') {
         // Optimistically update only this row so the table does not blink or unmount
         setResult((prev) => {
           if (!prev) return prev
@@ -181,7 +179,7 @@ export function AdminDocuments() {
       <div className="table-scroll"><table className="data-table"><thead><tr><th>Document</th><th>Department</th><th>Clearance</th><th>Version</th><th>Status</th><th>Uploaded</th><th className="actions-col">Actions</th></tr></thead><tbody>
         {loading && <tr><td colSpan={7} className="table-loading">Loading documents…</td></tr>}
         {!loading && result?.items.length === 0 && <tr><td colSpan={7} className="table-empty">No documents match these filters.</td></tr>}
-        {!loading && result?.items.map((doc) => <tr key={doc.id}><td><div className="document-cell"><span className="file-icon"><FileText size={17} /></span><span><strong>{doc.title}</strong><small>{doc.filename}</small></span></div></td><td>{doc.department}</td><td><span className={`clearance-tag ${doc.clearance_level.toLowerCase()}`}>{doc.clearance_level}</span></td><td>v{doc.version}</td><td><span className={`status-pill ${doc.status.toLowerCase()}`}>{doc.status.replace('_', ' ')}</span>{!doc.is_live && <small className="status-subline">Not live</small>}</td><td>{new Date(doc.uploaded_at).toLocaleDateString()}</td><td><div className="row-actions"><button className="icon-button small" disabled={busyId === doc.id || doc.status === 'UPDATING' || !doc.is_latest || !doc.has_source_file} onClick={() => void documentAction(doc, 'reindex')} title="Reindex"><RefreshCw size={15} /></button><button className="icon-button small" disabled={busyId === doc.id || !doc.is_latest || doc.status === 'UPDATING'} onClick={() => { replaceTarget.current = doc; replaceInput.current?.click() }} title="Replace version"><UploadCloud size={15} /></button><button className="icon-button small" disabled={busyId === doc.id || !doc.is_latest} onClick={() => void documentAction(doc, 'rollback')} title="Restore previous version"><RotateCcw size={15} /></button><button className="icon-button small" onClick={() => void openLogs(doc)} title="Processing history"><ScrollText size={15} /></button><button className="icon-button small danger" disabled={busyId === doc.id} onClick={() => void documentAction(doc, 'delete')} title="Delete"><Trash2 size={15} /></button></div></td></tr>)}
+        {!loading && result?.items.map((doc) => <tr key={doc.id}><td><div className="document-cell"><span className="file-icon"><FileText size={17} /></span><span><strong>{doc.title}</strong><small>{doc.filename}</small></span></div></td><td>{doc.department}</td><td><span className={`clearance-tag ${doc.clearance_level.toLowerCase()}`}>{doc.clearance_level}</span></td><td>v{doc.version}</td><td><span className={`status-pill ${doc.status.toLowerCase()}`}>{doc.status.replace('_', ' ')}</span>{!doc.is_live && <small className="status-subline">Not live</small>}</td><td>{new Date(doc.uploaded_at).toLocaleDateString()}</td><td><div className="row-actions"><button className="icon-button small" disabled={busyId === doc.id || doc.status === 'UPDATING' || !doc.is_latest || !doc.has_source_file} onClick={() => void documentAction(doc, 'reindex')} title="Reindex"><RefreshCw size={15} /></button><button className="icon-button small" disabled={busyId === doc.id || !doc.is_latest || doc.status === 'UPDATING'} onClick={() => { replaceTarget.current = doc; replaceInput.current?.click() }} title="Replace version"><UploadCloud size={15} /></button><button className="icon-button small" disabled={busyId === doc.id || !doc.is_latest} onClick={() => void documentAction(doc, 'rollback')} title="Restore previous version"><RotateCcw size={15} /></button><button className="icon-button small" onClick={() => void openLogs(doc)} title="Processing history"><ScrollText size={15} /></button><button className="icon-button small danger" disabled={busyId === doc.id || isDeleting} onClick={() => setDeleteTarget(doc)} title="Delete"><Trash2 size={15} /></button></div></td></tr>)}
       </tbody></table></div>
       {result && <Pagination page={result.page} totalPages={result.total_pages} onChange={(next) => void load(next)} />}
     </section>
@@ -287,6 +285,36 @@ export function AdminDocuments() {
           <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setUploadOpen(false)}>Cancel</button><button type="submit" className="primary-button" disabled={!uploadFile || uploading}>{uploading ? 'Uploading…' : 'Upload and index'}</button></div>
         </form>
       </Modal>
+    )}
+    {deleteTarget && (
+      <ConfirmDialog
+        title="Delete document?"
+        message={
+          <span>
+            Are you sure you want to delete &ldquo;<strong>{deleteTarget.title}</strong>&rdquo; and its indexed content? This action cannot be undone.
+          </span>
+        }
+        confirmText="Delete document"
+        confirmVariant="danger"
+        isBusy={isDeleting}
+        onCancel={() => {
+          if (!isDeleting) setDeleteTarget(null)
+        }}
+        onConfirm={async () => {
+          setIsDeleting(true)
+          try {
+            await api(`/api/v1/documents/${deleteTarget.id}`, { method: 'DELETE' })
+            showToast('Document deleted.')
+            setDeleteTarget(null)
+            await load(pageRef.current, undefined, true)
+          } catch (err) {
+            const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'Document deletion failed.'
+            showToast(msg, true)
+          } finally {
+            setIsDeleting(false)
+          }
+        }}
+      />
     )}
     {logsTarget && <Modal title={`Processing history · ${logsTarget.title}`} onClose={() => setLogsTarget(null)} wide><div className="document-log-list">{logsLoading && <div className="table-loading">Loading processing history…</div>}{!logsLoading && logs.length === 0 && <div className="empty-state compact"><ScrollText size={22} /><p>No processing events have been recorded for this document.</p></div>}{!logsLoading && logs.map((log) => <div className="document-log-row" key={log.id}><span className={`log-status ${log.status.toLowerCase()}`} /><div><div className="document-log-meta"><strong>{log.stage.replace('_', ' ')}</strong><span>{log.status}</span><small>{new Date(log.created_at).toLocaleString()}</small></div><p>{log.message}</p></div></div>)}<Pagination page={logsPage} totalPages={logsTotalPages} onChange={(next) => void openLogs(logsTarget, next)} /></div></Modal>}
     {toast && (

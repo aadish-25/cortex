@@ -4,6 +4,7 @@ import { api, ApiError } from '../api/client'
 import type { Page, User } from '../api/types'
 import { Modal } from '../components/Modal'
 import { Pagination } from '../components/Pagination'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 
 const emptyForm = {
   name: '',
@@ -46,6 +47,8 @@ export function AdminUsers() {
   }, [toast])
   const [modal, setModal] = useState<'create' | 'edit' | 'review' | null>(null)
   const [selected, setSelected] = useState<User | null>(null)
+  const [rejectUserTarget, setRejectUserTarget] = useState<User | null>(null)
+  const [rejectEmailReqId, setRejectEmailReqId] = useState<string | null>(null)
   const [form, setForm] = useState(emptyForm)
   const [applicantForm, setApplicantForm] = useState(emptyApplicantForm)
   const [saving, setSaving] = useState(false)
@@ -226,16 +229,15 @@ export function AdminUsers() {
     }
   }
 
-  async function rejectApplication(user?: User) {
-    const target = user || selected
+  async function doRejectApplication(target: User | null) {
     if (!target) return
-    if (!window.confirm(`Reject access request for ${target.name} (${target.email})? This will delete the pending request.`)) return
     setSaving(true)
     setError('')
     try {
       await api(`/api/v1/users/${target.id}`, { method: 'DELETE' })
       setToast('Application rejected and removed.')
       setModal(null)
+      setRejectUserTarget(null)
       await load(page)
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not reject application.')
@@ -264,14 +266,19 @@ export function AdminUsers() {
     }
   }
 
-  async function rejectEmailRevision(reqId: string) {
-    if (!window.confirm('Reject this corporate email revision request?')) return
+  async function doRejectEmailRevision(reqId: string | null) {
+    if (!reqId) return
+    setSaving(true)
     try {
       await api(`/api/v1/admin/email-requests/${reqId}/reject`, { method: 'POST' })
       setToast('Email revision request rejected.')
+      setModal(null)
+      setRejectEmailReqId(null)
       await loadEmailRequests()
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not reject email request.')
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -550,7 +557,7 @@ export function AdminUsers() {
                 </div>
                 {error && <div className="inline-error">{error}</div>}
                 <div className="modal-actions" style={{ justifyContent: 'space-between' }}>
-                  <button type="button" className="secondary-button danger" onClick={() => void rejectApplication()} disabled={saving}>
+                  <button type="button" className="secondary-button danger" onClick={() => setRejectUserTarget(selected)} disabled={saving}>
                     <Trash2 size={15} /> Reject Application
                   </button>
                   <div style={{ display: 'flex', gap: '8px' }}>
@@ -610,18 +617,7 @@ export function AdminUsers() {
                   type="button"
                   className="secondary-button danger"
                   disabled={saving}
-                  onClick={async () => {
-                    setSaving(true)
-                    setError('')
-                    try {
-                      await rejectEmailRevision(emailReq.id)
-                      setModal(null)
-                    } catch (err) {
-                      setError(err instanceof ApiError ? err.message : 'Could not reject request.')
-                    } finally {
-                      setSaving(false)
-                    }
-                  }}
+                  onClick={() => setRejectEmailReqId(emailReq.id)}
                 >
                   <X size={15} /> Reject Request
                 </button>
@@ -699,6 +695,34 @@ export function AdminUsers() {
             </div>
           </form>
         </Modal>
+      )}
+
+      {rejectUserTarget && (
+        <ConfirmDialog
+          title="Reject access request?"
+          message={
+            <span>
+              Reject access request for <strong>{rejectUserTarget.name}</strong> ({rejectUserTarget.email})? This will delete the pending request.
+            </span>
+          }
+          confirmText="Reject request"
+          confirmVariant="danger"
+          isBusy={saving}
+          onCancel={() => { if (!saving) setRejectUserTarget(null) }}
+          onConfirm={() => void doRejectApplication(rejectUserTarget)}
+        />
+      )}
+
+      {rejectEmailReqId && (
+        <ConfirmDialog
+          title="Reject email revision request?"
+          message="Are you sure you want to reject this corporate email revision request?"
+          confirmText="Reject request"
+          confirmVariant="danger"
+          isBusy={saving}
+          onCancel={() => { if (!saving) setRejectEmailReqId(null) }}
+          onConfirm={() => void doRejectEmailRevision(rejectEmailReqId)}
+        />
       )}
 
       {toast && <div className="toast-message"><span>{toast}</span><button onClick={() => setToast('')}><X size={14} /></button></div>}
