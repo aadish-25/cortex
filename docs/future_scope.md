@@ -105,36 +105,33 @@ Consequently:
 
 ---
 
-### 1.5 Jira Account Linking & First-Login Onboarding (User-Attributed Workflows)
+### 1.5 Personal Integrations Planning & User-Attributed Workflows (Jira, GitHub, Drive, Linear, Slack)
 
-#### The Problem: Default Service Account Attribution
-Currently, when Cortex creates Jira tickets via the Atlassian REST API v3, it authenticates using the platform's system API token (`JIRA_API_EMAIL`). Because standard ticket requests specify metadata (`summary`, `description`, `priority`) without an explicit `reporter` account ID, Jira Cloud defaults the `reporter` field to the API token holder (`Aadish Sonawane`). Consequently, when employee `Aditi Khaparde` (`adzz.k@cortex.com`) instructs Cortex to raise an issue, the ticket appears in Jira as reported by Aadish Sonawane, obscuring organizational ownership and auditing.
+#### The Problem: Shared Service Account vs. True Personal Attribution
+Currently, Cortex integrates with Jira, GitHub, and Google Drive using shared platform service account credentials (e.g., `JIRA_API_EMAIL`, `GITHUB_API_TOKEN`, `GOOGLE_DRIVE_ROOT_FOLDER_ID`). While this provides baseline connectivity for demo and system-level operations, it creates critical limitations in production:
+1. **Lack of Attribution**: When Cortex creates a Jira ticket, Jira Cloud attributes the `reporter` to the service account holder rather than the active employee.
+2. **Permission Boundary Collapse**: All users access the same repository and folder scopes configured in `.env`, bypassing individual GitHub team permissions or private Drive folders.
+3. **No Private Workspace Isolation**: Users cannot query their own private repositories, personal drafts, or departmental ticket backlogs.
 
-#### Architectural Solution & Implementation
-1. **First-Login Onboarding & Account Linking Flow**:
-   - Introduce an onboarding step upon first user login (or in `SettingsPage.tsx` > Integrations) presenting a **"Connect your Atlassian Jira Account"** modal.
-   - Provide a "Skip for now" option, accompanied by an ambient reminder banner when viewing engineering or incident workflows.
-   - Users authorize via Atlassian OAuth 2.0 (3LO) or link their corporate Atlassian account email.
-2. **User Profile Jira Mapping (`users` table)**:
-   ```sql
-   ALTER TABLE users ADD COLUMN jira_account_id VARCHAR(128);
-   ALTER TABLE users ADD COLUMN jira_email VARCHAR(255);
-   ```
-3. **Dynamic Reporter Identification in Jira Service**:
-   - In `backend/services/integrations/jira_service.py`, when drafting or confirming an issue:
-     - Check if `current_user.jira_account_id` is cached in PostgreSQL.
-     - If not cached but `current_user.personal_email` or `corporate_email` is available, query Jira Cloud's User Search API:
-       ```
-       GET /rest/api/3/user/search?query={user.email}
-       ```
-     - Inject the resolved `accountId` into the Jira ticket payload:
-       ```python
-       issue_dict["fields"]["reporter"] = {"accountId": resolved_account_id}
-       ```
-     - Cache the result in `users.jira_account_id` for instant zero-latency lookup on future actions.
-4. **Contextual Fallback & In-Chat Connection Prompting**:
-   - If an unlinked user instructs Cortex to *"raise a jira ticket"*, Cortex detects missing credentials and gracefully responds with an interactive prompt:
-     > *"To file this ticket under your name in Jira, please connect your Atlassian account [Connect Jira](#onboarding). Alternatively, I can submit this on your behalf via the Engineering Service Proxy."*
+#### Comprehensive Architecture & Discussion: Personal Integration Studio
+To advance from shared platform proxies to true user-attributed enterprise workflows, Cortex will implement a **Personal Integrations Studio** (`/settings/integrations`):
+
+1. **Per-User Integration Catalog**:
+   - **Atlassian Jira**: Personal OAuth 2.0 (3LO) or personal API token for personalized ticket creation, assigned issue queries, and sprint retrospectives attributed directly to the employee.
+   - **Personal GitHub**: OAuth App / Personal Access Token (PAT) with granular scopes (`repo:status`, `read:org`, `pull_requests:read`) enabling Cortex to inspect the developer's assigned pull requests, review requests, and private branches.
+   - **Personal Google Drive**: Google OAuth 2.0 with incremental authorization for searching the user's personal Google Docs, Sheets, and shared drives.
+   - **Linear & Asana**: Issue tracking alternatives for engineering and product teams.
+   - **Slack & Microsoft Teams**: Ambient notifications and conversational bot routing.
+
+2. **Security & Credential Vault Architecture**:
+   - **Encrypted Token Vault**: All user-level access tokens and refresh tokens are encrypted at rest using AES-256-GCM with envelope encryption via a dedicated `CORTEX_VAULT_KEY`.
+   - **Zero-Logging Guardrail**: Third-party OAuth tokens and secrets are strictly stripped from all audit logs, telemetry, and LLM prompt context windows.
+   - **Automatic Refresh & Lifecycle**: Celery cron worker automatically evaluates token expiration and triggers OAuth 2.0 refresh flows before token expiration.
+
+3. **Contextual Fallback & In-Chat Connection Prompting**:
+   - When an unlinked employee asks to file an issue or inspect a personal branch, Cortex detects that no personal integration is linked:
+     > *"To file this ticket under your name in Jira, please link your personal account in [Settings → Integrations](#integrations). Alternatively, I can submit this on your behalf via the Engineering Service Proxy."*
+   - Allows seamless fallback without blocking employee workflows.
 
 ---
 
@@ -443,6 +440,30 @@ Currently, multiple administrative and destructive actions across the frontend r
 
 ---
 
+### 1.18 Nuanced Intent-Aware Fallback & Clarification Engine (Replacing Misleading Uniform Fallback)
+
+#### The Problem: Misleading Uniform Fallback Obscuring True Root Causes
+Currently, any time synthesis or retrieval cannot produce verified evidence, the backend returns a single static fallback string:
+> *"I couldn't find verified information in the documents you have access to."*
+
+This uniform message is extremely misleading to users:
+- If the user's prompt was vague, incomprehensible, or ambiguous (e.g. asking *"what are the bugs"* without clarifying project bugs vs. GitHub repo issues vs. personal issues), the user assumes Cortex searched their files and found nothing.
+- If the user explicitly instructed Cortex to query a database or repository, and the planner failed or found zero items, the message falsely claims "documents" were searched.
+- It prevents the user from understanding what actually happened or how to fix their prompt.
+
+#### Planned Architecture & Capabilities
+1. **Context-Sensitive Safe Messaging**:
+   Replace the single uniform fallback string with nuanced, intent-aware safe messages that provide honest clarity without leaking backend server internals:
+   - **Unclear / Incomprehensible Prompt**: *"I couldn't quite understand your request. Could you rephrase your question?"*
+   - **Ambiguous Entity / Target**: *"I couldn't get your message, do you mean GitHub issues or do you mean something else?"*
+   - **Internal Knowledge Not Found**: *"I searched the internal documents you have access to, but couldn't find relevant information on that topic."*
+   - **Repository Not Found / Empty**: *"I searched the connected repository, but couldn't find matching code, issues, or pull requests."*
+   - **External Web Not Found**: *"I searched the web, but couldn't find relevant results on that topic."*
+2. **Ambiguity Clarification Route**:
+   When the planner detects ambiguous intent, rather than guessing a tool or dropping to a document fallback, it directly emits a clarification question as the final synthesized message.
+
+---
+
 ## 2. Moderate Complexity Scope (Medium-Term Enhancements)
 
 These features involve integrations with external worker pipelines, scheduled cron tasks, or cross-service state synchronization.
@@ -572,11 +593,6 @@ These features represent significant architectural endeavors involving advanced 
 - **SCIM 2.0 User Provisioning**:
   - Automatically provision, update, and de-provision employee accounts based on HR information system (HRIS) webhooks (Workday, BambooHR, Rippling).
   - Automatically sync employee department and clearance levels directly from corporate directory attributes.
-
-### 3.3 Collaborative Multi-Agent Research Canvas
-- **Multi-Agent Deep Research**:
-  - Fan out research tasks to multiple subagents running in parallel across vector memory, web sources, and enterprise databases.
-  - Synthesize cross-document conflict reports (e.g. "Policy document A states X, but HR memo B states Y").
 
 ---
 
